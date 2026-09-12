@@ -8,6 +8,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
+# 🔴 Список Telegram ID адміністраторів
+ADMIN_IDS = [945268466]
+
 DB_FILE = "class_budget.db"
 
 
@@ -63,10 +66,6 @@ def init_db():
             (18, "Шовнадзе Арсен", "Шовнадзе Суліко", "+380671773179"),
         ]
         c.executemany("INSERT INTO students VALUES (?, ?, ?, ?)", students)
-        c.execute(
-            "INSERT INTO collections (id, name, is_class_fund, target_amount)"
-            " VALUES (1, 'Фонд класу', 1, 0)"
-        )
         conn.commit()
     conn.close()
 
@@ -100,6 +99,7 @@ HTML_TEMPLATE = """
         th { background: #007aff; color: white; }
         select, input, button.form-btn { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
         button.form-btn { background: #34c759; color: white; border: none; font-weight: bold; }
+        button.danger-btn { background: #ff3b30; color: white; border: none; font-weight: bold; }
         .badge { padding: 3px 6px; border-radius: 4px; font-weight: bold; }
         .plus { background: #d4edda; color: #155724; }
         .minus { background: #f8d7da; color: #721c24; }
@@ -108,10 +108,10 @@ HTML_TEMPLATE = """
 <body>
     <div class="nav">
         <button class="active" onclick="switchTab('view-tab', this)">📊 Статистика зборів</button>
-        <button onclick="switchTab('admin-tab', this)">⚙️ Адмін-панель</button>
+        <button id="admin-tab-btn" style="display:none;" onclick="switchTab('admin-tab', this)">⚙️ Адмін-панель</button>
     </div>
 
-    <!-- ВКЛАДКА 1: ПЕРЕГЛЯД ТА СТАТИСТИКА БАТЬКІВ -->
+    <!-- ВКЛАДКА 1: ДЛЯ БАТЬКІВ -->
     <div id="view-tab" class="tab-content active">
         <div class="card">
             <label><b>Оберіть збір для аналізу:</b></label>
@@ -158,10 +158,18 @@ HTML_TEMPLATE = """
     <div id="admin-tab" class="tab-content">
         <div class="card">
             <h3>➕ Створити новий збір</h3>
-            <label>Назва збору:</label>
+            <label>Тип збору:</label>
+            <select id="new-coll-type">
+                <option value="0">🎯 Інший цільовий збір (екскурсія, театр тощо)</option>
+                <option value="1">🏫 Фонд класу</option>
+            </select>
+
+            <label>Назва / призначення збору:</label>
             <input type="text" id="new-coll-name" placeholder="напр. Екскурсія в музей">
+            
             <label>Потрібно з дитини (грн):</label>
             <input type="number" id="new-coll-target" placeholder="200">
+            
             <button class="form-btn" onclick="createCollection()">Додати збір</button>
         </div>
 
@@ -174,8 +182,15 @@ HTML_TEMPLATE = """
             <select id="select-student"></select>
             
             <label>Внести суму (грн):</label>
-            <input type="number" id="pay-amount" placeholder="500">
+            <input type="number" id="pay-amount" placeholder="200">
             <button class="form-btn" onclick="savePayment()">Зберегти оплату</button>
+        </div>
+
+        <div class="card" style="border: 1px solid #ffcccc;">
+            <h3 style="color: #d9534f;">🗑 Видалити збір</h3>
+            <label>Оберіть збір для видалення:</label>
+            <select id="delete-collection-select"></select>
+            <button class="danger-btn" onclick="deleteCollection()">Видалити збір</button>
         </div>
     </div>
 
@@ -184,6 +199,7 @@ HTML_TEMPLATE = """
         tg.expand();
 
         let globalData = null;
+        let currentUserId = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0;
 
         function switchTab(tabId, btn) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -193,28 +209,43 @@ HTML_TEMPLATE = """
         }
 
         async function loadData() {
-            const res = await fetch('/api/budget');
+            const res = await fetch(`/api/budget?user_id=${currentUserId}`);
             globalData = await res.json();
             
-            // Заповнення списку зборів для батьків
+            if(globalData.is_admin) {
+                document.getElementById('admin-tab-btn').style.display = 'block';
+            }
+
             const pSelect = document.getElementById('parent-collection-filter');
             pSelect.innerHTML = '<option value="all">🌐 Зведений звіт (Всі збори)</option>';
             globalData.collections.forEach(c => {
-                pSelect.innerHTML += `<option value="${c.id}">📁 ${c.name}</option>`;
+                const typePrefix = c.is_class_fund ? '🏫' : '📁';
+                pSelect.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
             });
 
-            // Заповнення селектів для адмінки
-            const collSelect = document.getElementById('select-collection');
-            collSelect.innerHTML = '';
-            globalData.collections.forEach(c => {
-                collSelect.innerHTML += `<option value="${c.id}">${c.name} (${c.target_amount} грн/учень)</option>`;
-            });
+            if(globalData.is_admin) {
+                const collSelect = document.getElementById('select-collection');
+                const delSelect = document.getElementById('delete-collection-select');
+                
+                collSelect.innerHTML = '';
+                delSelect.innerHTML = '';
 
-            const studSelect = document.getElementById('select-student');
-            studSelect.innerHTML = '';
-            globalData.students.forEach(s => {
-                studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
-            });
+                if(globalData.collections.length === 0) {
+                    collSelect.innerHTML = '<option value="">Немає активних зборів</option>';
+                    delSelect.innerHTML = '<option value="">Немає активних зборів</option>';
+                } else {
+                    globalData.collections.forEach(c => {
+                        collSelect.innerHTML += `<option value="${c.id}">${c.name} (${c.target_amount} грн/учень)</option>`;
+                        delSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                    });
+                }
+
+                const studSelect = document.getElementById('select-student');
+                studSelect.innerHTML = '';
+                globalData.students.forEach(s => {
+                    studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
+                });
+            }
 
             renderParentView();
         }
@@ -226,7 +257,6 @@ HTML_TEMPLATE = """
             tbody.innerHTML = '';
 
             if (selectedId === 'all') {
-                // Зведений режим
                 let totalCollectedAll = 0;
                 let totalTargetAll = 0;
 
@@ -251,9 +281,10 @@ HTML_TEMPLATE = """
                 document.getElementById('stat-progress').innerText = `${progress}%`;
 
             } else {
-                // Режим конкретного збору
                 const collId = parseInt(selectedId);
                 const coll = globalData.collections.find(c => c.id === collId);
+                if(!coll) return;
+
                 let totalCollected = 0;
                 const studentCount = globalData.students.length;
                 const totalTarget = (coll.target_amount || 0) * studentCount;
@@ -284,15 +315,24 @@ HTML_TEMPLATE = """
         }
 
         async function createCollection() {
+            const is_class_fund = document.getElementById('new-coll-type').value;
             const name = document.getElementById('new-coll-name').value;
             const target = document.getElementById('new-coll-target').value;
-            if(!name) return alert('Вкажіть назву збору!');
+            if(!name) return alert('Вкажіть назву/призначення збору!');
             
-            await fetch('/api/add_collection', {
+            const res = await fetch('/api/add_collection', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name, target_amount: parseFloat(target || 0)})
+                body: JSON.stringify({
+                    user_id: currentUserId,
+                    name,
+                    is_class_fund: parseInt(is_class_fund),
+                    target_amount: parseFloat(target || 0)
+                })
             });
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
             alert('Збір успішно створено!');
             document.getElementById('new-coll-name').value = '';
             document.getElementById('new-coll-target').value = '';
@@ -303,15 +343,37 @@ HTML_TEMPLATE = """
             const collection_id = document.getElementById('select-collection').value;
             const student_id = document.getElementById('select-student').value;
             const paid = document.getElementById('pay-amount').value;
+            if(!collection_id) return alert('Оберіть активний збір!');
             if(!paid) return alert('Вкажіть суму!');
 
-            await fetch('/api/save_payment', {
+            const res = await fetch('/api/save_payment', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({student_id, collection_id, paid: parseFloat(paid)})
+                body: JSON.stringify({user_id: currentUserId, student_id, collection_id, paid: parseFloat(paid)})
             });
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
             alert('Оплату збережено!');
             document.getElementById('pay-amount').value = '';
+            loadData();
+        }
+
+        async function deleteCollection() {
+            const collection_id = document.getElementById('delete-collection-select').value;
+            if(!collection_id) return alert('Немає збору для видалення!');
+
+            if(!confirm('Ви дійсно бажаєте видалити цей збір та всі дані про його сплату?')) return;
+
+            const res = await fetch('/api/delete_collection', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_id: currentUserId, collection_id})
+            });
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Збір видалено!');
             loadData();
         }
 
@@ -329,12 +391,20 @@ def index():
 
 @app.route("/api/budget")
 def get_budget():
+    user_id = int(request.args.get("user_id", 0))
+    is_admin = user_id in ADMIN_IDS
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    c.execute("SELECT id, name, target_amount FROM collections")
+    c.execute("SELECT id, name, is_class_fund, target_amount FROM collections")
     colls = [
-        {"id": row[0], "name": row[1], "target_amount": row[2]}
+        {
+            "id": row[0],
+            "name": row[1],
+            "is_class_fund": row[2],
+            "target_amount": row[3],
+        }
         for row in c.fetchall()
     ]
 
@@ -345,7 +415,6 @@ def get_budget():
     for s in students:
         s_id, full_name, parent_name = s
 
-        # Деталізація за кожним збором окремо
         c.execute(
             "SELECT collection_id, required, paid FROM payments WHERE"
             " student_id=?",
@@ -373,20 +442,31 @@ def get_budget():
         })
 
     conn.close()
-    return jsonify({"students": student_list, "collections": colls})
+    return jsonify({
+        "students": student_list,
+        "collections": colls,
+        "is_admin": is_admin,
+    })
 
 
 @app.route("/api/add_collection", methods=["POST"])
 def add_collection():
     data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
     name = data.get("name")
+    is_fund = data.get("is_class_fund", 0)
     target = data.get("target_amount", 0)
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO collections (name, target_amount) VALUES (?, ?)",
-        (name, target),
+        "INSERT INTO collections (name, is_class_fund, target_amount) VALUES"
+        " (?, ?, ?)",
+        (name, is_fund, target),
     )
     coll_id = c.lastrowid
 
@@ -407,6 +487,11 @@ def add_collection():
 @app.route("/api/save_payment", methods=["POST"])
 def save_payment():
     data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
     s_id = data.get("student_id")
     c_id = data.get("collection_id")
     paid = data.get("paid", 0)
@@ -419,6 +504,25 @@ def save_payment():
         " paid=paid+EXCLUDED.paid",
         (s_id, c_id, paid),
     )
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/delete_collection", methods=["POST"])
+def delete_collection():
+    data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    c_id = data.get("collection_id")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM collections WHERE id=?", (c_id,))
+    c.execute("DELETE FROM payments WHERE collection_id=?", (c_id,))
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
