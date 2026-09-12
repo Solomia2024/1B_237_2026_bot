@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import os
 import sqlite3
 from flask import (
@@ -16,7 +17,7 @@ TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
 # 🔴 Список Telegram ID адміністраторів
-ADMIN_IDS = [123456789, 987654321]
+ADMIN_IDS = [945268466]
 
 DB_FILE = "class_budget.db"
 UPLOAD_FOLDER = "receipts"
@@ -62,12 +63,21 @@ def init_db():
                     PRIMARY KEY (student_id, collection_id)
                 )"""
     )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS expenses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    collection_id INTEGER NOT NULL,
+                    purpose TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    date_str TEXT NOT NULL,
+                    receipt_filename TEXT
+                )"""
+    )
 
-    # Спроба додати колонку receipt_filename, якщо БД вже створена раніше
     try:
         c.execute("ALTER TABLE payments ADD COLUMN receipt_filename TEXT")
     except sqlite3.OperationalError:
-        pass  # Колонка вже існує
+        pass
 
     c.execute("SELECT COUNT(*) FROM students")
     if c.fetchone()[0] == 0:
@@ -112,7 +122,7 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f4f7; padding: 10px; margin:0; }
         .nav { display: flex; gap: 5px; margin-bottom: 15px; }
-        .nav button { flex: 1; padding: 10px; border: none; background: #e5e5ea; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .nav button { flex: 1; padding: 10px 4px; border: none; background: #e5e5ea; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
         .nav button.active { background: #007aff; color: white; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
@@ -136,11 +146,12 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="nav">
-        <button class="active" onclick="switchTab('view-tab', this)">📊 Статистика зборів</button>
-        <button id="admin-tab-btn" style="display:none;" onclick="switchTab('admin-tab', this)">⚙️ Адмін-панель</button>
+        <button class="active" onclick="switchTab('view-tab', this)">📊 Збори</button>
+        <button onclick="switchTab('expenses-tab', this)">📉 Витрати</button>
+        <button id="admin-tab-btn" style="display:none;" onclick="switchTab('admin-tab', this)">⚙️ Адмінка</button>
     </div>
 
-    <!-- ВКЛАДКА 1: ДЛЯ БАТЬКІВ -->
+    <!-- ВКЛАДКА 1: ДЛЯ БАТЬКІВ (ЗБОРИ) -->
     <div id="view-tab" class="tab-content active">
         <div class="card">
             <label><b>Оберіть збір для аналізу:</b></label>
@@ -183,7 +194,44 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ВКЛАДКА 2: АДМІНІСТРУВАННЯ -->
+    <!-- ВКЛАДКА 2: ДЛЯ БАТЬКІВ (ВИРАТИ) -->
+    <div id="expenses-tab" class="tab-content">
+        <div class="card">
+            <label><b>Фільтр витрат за збором:</b></label>
+            <select id="expense-collection-filter" onchange="renderExpensesView()"></select>
+        </div>
+
+        <div class="card">
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="title">Загальні витрати</div>
+                    <div class="val" id="exp-total-amount" style="color:#d9534f;">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Чистий залишок</div>
+                    <div class="val" id="exp-net-balance">0 грн</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="overflow-x:auto;">
+            <h3>📋 Реєстр використаних коштів</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Дата</th>
+                        <th>Призначення (Збір)</th>
+                        <th>Мета витрати</th>
+                        <th>Сума</th>
+                        <th>Чек</th>
+                    </tr>
+                </thead>
+                <tbody id="expenses-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 3: АДМІНІСТРУВАННЯ -->
     <div id="admin-tab" class="tab-content">
         <div class="card">
             <h3>➕ Створити новий збір</h3>
@@ -218,7 +266,27 @@ HTML_TEMPLATE = """
             <input type="file" id="receipt-file" accept="image/*,.pdf">
             <div class="info-text" id="current-receipt-hint"></div>
 
-            <button class="form-btn" onclick="savePayment()">Зберегти (Оновити суму)</button>
+            <button class="form-btn" onclick="savePayment()">Зберегти оплату</button>
+        </div>
+
+        <div class="card" style="border: 1px solid #ffd700;">
+            <h3>📉 Додати витрату</h3>
+            <label>Призначення (Збір):</label>
+            <select id="expense-collection-select"></select>
+
+            <label>Мета витрати (на що витрачено):</label>
+            <input type="text" id="expense-purpose" placeholder="напр. Закупівля зошитів або Квитки">
+
+            <label>Сума витрати (грн):</label>
+            <input type="number" id="expense-amount" placeholder="450">
+
+            <label>Дата витрати:</label>
+            <input type="date" id="expense-date">
+
+            <label>🧾 Чек / Квитанція (опційно):</label>
+            <input type="file" id="expense-receipt-file" accept="image/*,.pdf">
+
+            <button class="form-btn" style="background:#007aff;" onclick="saveExpense()">Зберегти витрату</button>
         </div>
 
         <div class="card" style="border: 1px solid #ffcccc;">
@@ -236,6 +304,9 @@ HTML_TEMPLATE = """
         let globalData = null;
         let currentUserId = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0;
 
+        // Встановлення сьогоднішньої дати за замовчуванням
+        document.getElementById('expense-date').valueAsDate = new Date();
+
         function switchTab(tabId, btn) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
@@ -251,26 +322,38 @@ HTML_TEMPLATE = """
                 document.getElementById('admin-tab-btn').style.display = 'block';
             }
 
+            // Селект для зборів (вкладка 1)
             const pSelect = document.getElementById('parent-collection-filter');
             pSelect.innerHTML = '<option value="all">🌐 Зведений звіт (Всі збори)</option>';
+            
+            // Селект для фільтру витрат (вкладка 2)
+            const expFilter = document.getElementById('expense-collection-filter');
+            expFilter.innerHTML = '<option value="all">🌐 Всі витрати</option>';
+
             globalData.collections.forEach(c => {
                 const typePrefix = c.is_class_fund ? '🏫' : '📁';
                 pSelect.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
+                expFilter.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
             });
 
+            // Адмінські селекти
             if(globalData.is_admin) {
                 const collSelect = document.getElementById('select-collection');
+                const expCollSelect = document.getElementById('expense-collection-select');
                 const delSelect = document.getElementById('delete-collection-select');
                 
                 collSelect.innerHTML = '';
+                expCollSelect.innerHTML = '';
                 delSelect.innerHTML = '';
 
                 if(globalData.collections.length === 0) {
                     collSelect.innerHTML = '<option value="">Немає активних зборів</option>';
+                    expCollSelect.innerHTML = '<option value="">Немає активних зборів</option>';
                     delSelect.innerHTML = '<option value="">Немає активних зборів</option>';
                 } else {
                     globalData.collections.forEach(c => {
                         collSelect.innerHTML += `<option value="${c.id}">${c.name} (${c.target_amount} грн/учень)</option>`;
+                        expCollSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                         delSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                     });
                 }
@@ -285,6 +368,7 @@ HTML_TEMPLATE = """
             }
 
             renderParentView();
+            renderExpensesView();
         }
 
         function updatePaymentInput() {
@@ -377,6 +461,44 @@ HTML_TEMPLATE = """
             }
         }
 
+        function renderExpensesView() {
+            if(!globalData) return;
+            const filterId = document.getElementById('expense-collection-filter').value;
+            const tbody = document.getElementById('expenses-table-body');
+            tbody.innerHTML = '';
+
+            let filteredExpenses = globalData.expenses;
+            if(filterId !== 'all') {
+                filteredExpenses = globalData.expenses.filter(e => e.collection_id === parseInt(filterId));
+            }
+
+            let sumExp = 0;
+            filteredExpenses.forEach(e => {
+                sumExp += e.amount;
+                let rHtml = e.receipt ? `<a class="receipt-link" href="/uploads/${e.receipt}" target="_blank">🧾 Чек</a>` : '-';
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${e.date_str}</td>
+                        <td><b>${e.collection_name}</b></td>
+                        <td>${e.purpose}</td>
+                        <td style="color:#d9534f; font-weight:bold;">-${e.amount} грн</td>
+                        <td>${rHtml}</td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('exp-total-amount').innerText = `${sumExp} грн`;
+            
+            // Чистий залишок = Всього зібрано - Всього витрачено
+            let totalCollectedAll = globalData.students.reduce((acc, s) => acc + s.total_paid, 0);
+            let totalExpAll = globalData.expenses.reduce((acc, e) => acc + e.amount, 0);
+            let netBal = totalCollectedAll - totalExpAll;
+            
+            const netElem = document.getElementById('exp-net-balance');
+            netElem.innerText = `${netBal} грн`;
+            netElem.style.color = netBal >= 0 ? '#34c759' : '#d9534f';
+        }
+
         async function createCollection() {
             const is_class_fund = document.getElementById('new-coll-type').value;
             const name = document.getElementById('new-coll-name').value;
@@ -434,11 +556,48 @@ HTML_TEMPLATE = """
             loadData();
         }
 
+        async function saveExpense() {
+            const collection_id = document.getElementById('expense-collection-select').value;
+            const purpose = document.getElementById('expense-purpose').value;
+            const amount = document.getElementById('expense-amount').value;
+            const date_str = document.getElementById('expense-date').value;
+            const fileInput = document.getElementById('expense-receipt-file');
+
+            if(!collection_id) return alert('Оберіть збір призначення!');
+            if(!purpose) return alert('Вкажіть мету витрати!');
+            if(!amount) return alert('Вкажіть суму витрати!');
+
+            const formData = new FormData();
+            formData.append('user_id', currentUserId);
+            formData.append('collection_id', collection_id);
+            formData.append('purpose', purpose);
+            formData.append('amount', amount);
+            formData.append('date_str', date_str);
+
+            if(fileInput.files.length > 0) {
+                formData.append('receipt', fileInput.files[0]);
+            }
+
+            const res = await fetch('/api/add_expense', {
+                method: 'POST',
+                body: formData
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Витрату успішно додано!');
+            document.getElementById('expense-purpose').value = '';
+            document.getElementById('expense-amount').value = '';
+            fileInput.value = '';
+            loadData();
+        }
+
         async function deleteCollection() {
             const collection_id = document.getElementById('delete-collection-select').value;
             if(!collection_id) return alert('Немає збору для видалення!');
 
-            if(!confirm('Ви дійсно бажаєте видалити цей збір та всі дані про його сплату?')) return;
+            if(!confirm('Ви дійсно бажаєте видалити цей збір та всі дані про його сплату й витрати?')) return;
 
             const res = await fetch('/api/delete_collection', {
                 method: 'POST',
@@ -525,10 +684,30 @@ def get_budget():
             "balance": total_paid - total_required,
         })
 
+    # Отримання списку всіх витрат
+    c.execute(
+        "SELECT e.id, e.collection_id, c.name, e.purpose, e.amount, e.date_str,"
+        " e.receipt_filename FROM expenses e JOIN collections c ON"
+        " e.collection_id = c.id ORDER BY e.id DESC"
+    )
+    expenses_list = [
+        {
+            "id": row[0],
+            "collection_id": row[1],
+            "collection_name": row[2],
+            "purpose": row[3],
+            "amount": row[4],
+            "date_str": row[5],
+            "receipt": row[6],
+        }
+        for row in c.fetchall()
+    ]
+
     conn.close()
     return jsonify({
         "students": student_list,
         "collections": colls,
+        "expenses": expenses_list,
         "is_admin": is_admin,
     })
 
@@ -611,6 +790,41 @@ def save_payment():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/add_expense", methods=["POST"])
+def add_expense():
+    user_id = int(request.form.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    c_id = request.form.get("collection_id")
+    purpose = request.form.get("purpose")
+    amount = float(request.form.get("amount", 0))
+    date_str = request.form.get(
+        "date_str", datetime.now().strftime("%Y-%m-%d")
+    )
+
+    filename = None
+    if "receipt" in request.files:
+        file = request.files["receipt"]
+        if file and allowed_file(file.filename):
+            ext = file.filename.rsplit(".", 1)[1].lower()
+            timestamp = int(datetime.now().timestamp())
+            filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO expenses (collection_id, purpose, amount, date_str,"
+        " receipt_filename) VALUES (?, ?, ?, ?, ?)",
+        (c_id, purpose, amount, date_str, filename),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/delete_collection", methods=["POST"])
 def delete_collection():
     data = request.json
@@ -625,6 +839,7 @@ def delete_collection():
     c = conn.cursor()
     c.execute("DELETE FROM collections WHERE id=?", (c_id,))
     c.execute("DELETE FROM payments WHERE collection_id=?", (c_id,))
+    c.execute("DELETE FROM expenses WHERE collection_id=?", (c_id,))
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
