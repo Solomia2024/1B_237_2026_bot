@@ -1,10 +1,11 @@
+import asyncio
 import os
 import sqlite3
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = os.getenv("BOT_TOKEN", "ВАШ_ТОКЕН_СЮДИ")
+TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
 DB_FILE = "class_budget.db"
@@ -109,9 +110,7 @@ HTML_TEMPLATE = """
                     <th>Залишок</th>
                 </tr>
             </thead>
-            <tbody id="table-body">
-                <!-- Дані завантажуються динамічно -->
-            </tbody>
+            <tbody id="table-body"></tbody>
         </table>
     </div>
 
@@ -155,15 +154,12 @@ def index():
 def get_budget():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-
     c.execute("SELECT id, full_name, parent_name FROM students")
     students = c.fetchall()
 
     result = []
     for s in students:
         s_id, full_name, parent_name = s
-
-        # SUM(Збори) - Загальні надходження
         c.execute(
             "SELECT SUM(paid), SUM(required) FROM payments WHERE student_id=?",
             (s_id,),
@@ -172,7 +168,6 @@ def get_budget():
         total_paid = row[0] or 0
         total_req = row[1] or 0
 
-        # SUMIF (Фонд класу)
         c.execute(
             "SELECT SUM(p.paid) FROM payments p JOIN collections c ON"
             " p.collection_id=c.id WHERE p.student_id=? AND c.is_class_fund=1",
@@ -202,22 +197,22 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     await update.message.reply_text(
-        "👋 Вітаємо в системі обліку budget 1-Б класу!\nНатисніть кнопку нижче"
+        "👋 Вітаємо в системі обліку бюджету 1-Б класу!\nНатисніть кнопку нижче"
         " для перегляду:",
         reply_markup=InlineKeyboardMarkup(kb),
     )
 
 
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    telegram_app = ApplicationBuilder().token(TOKEN).build()
+    telegram_app.add_handler(CommandHandler("start", start_cmd))
+    telegram_app.run_polling(drop_pending_updates=True, close_loop=False)
+
+
 if __name__ == "__main__":
     from threading import Thread
-
-    # Запуск Telegram Bot паралельно з Flask
-    from telegram.ext import Application
-
-    def run_bot():
-        telegram_app = ApplicationBuilder().token(TOKEN).build()
-        telegram_app.add_handler(CommandHandler("start", start_cmd))
-        telegram_app.run_polling(drop_pending_updates=True)
 
     Thread(target=run_bot, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
