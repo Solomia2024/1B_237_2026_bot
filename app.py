@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sqlite3
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -26,7 +26,8 @@ def init_db():
         """CREATE TABLE IF NOT EXISTS collections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
-                    is_class_fund INTEGER DEFAULT 0
+                    is_class_fund INTEGER DEFAULT 0,
+                    target_amount REAL DEFAULT 0
                 )"""
     )
     c.execute(
@@ -63,8 +64,8 @@ def init_db():
         ]
         c.executemany("INSERT INTO students VALUES (?, ?, ?, ?)", students)
         c.execute(
-            "INSERT INTO collections (id, name, is_class_fund) VALUES (1,"
-            " 'Фонд класу', 1)"
+            "INSERT INTO collections (id, name, is_class_fund, target_amount)"
+            " VALUES (1, 'Фонд класу', 1, 0)"
         )
         conn.commit()
     conn.close()
@@ -72,7 +73,6 @@ def init_db():
 
 init_db()
 
-# --- FLASK WEB SERVER ---
 app = Flask(__name__)
 
 HTML_TEMPLATE = """
@@ -84,60 +84,237 @@ HTML_TEMPLATE = """
     <title>Бюджет 1-Б класу</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f4f4f7; padding: 10px; margin:0; }
-        h2 { color: #333; text-align: center; font-size: 18px; margin-bottom: 15px; }
-        .table-container { overflow-x: auto; background: #fff; border-radius: 10px; padding: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f4f7; padding: 10px; margin:0; }
+        .nav { display: flex; gap: 5px; margin-bottom: 15px; }
+        .nav button { flex: 1; padding: 10px; border: none; background: #e5e5ea; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .nav button.active { background: #007aff; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .card { background: white; border-radius: 10px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .stat-box { background: #f8f9fa; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #eee; }
+        .stat-box .title { font-size: 11px; color: #666; font-weight: bold; text-transform: uppercase; }
+        .stat-box .val { font-size: 16px; font-weight: bold; color: #007aff; margin-top: 4px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { border: 1px solid #e0e0e0; padding: 8px; text-align: left; }
-        th { background: #007aff; color: #fff; position: sticky; top: 0; }
-        tr:nth-child(even) { background: #f9f9f9; }
+        th { background: #007aff; color: white; }
+        select, input, button.form-btn { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        button.form-btn { background: #34c759; color: white; border: none; font-weight: bold; }
         .badge { padding: 3px 6px; border-radius: 4px; font-weight: bold; }
         .plus { background: #d4edda; color: #155724; }
         .minus { background: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body>
-    <h2>📊 Реєстр бюджету 1-Б класу</h2>
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th>№</th>
-                    <th>Учень</th>
-                    <th>Батьки</th>
-                    <th>Фонд класу</th>
-                    <th>Загалом сплачено</th>
-                    <th>Залишок</th>
-                </tr>
-            </thead>
-            <tbody id="table-body"></tbody>
-        </table>
+    <div class="nav">
+        <button class="active" onclick="switchTab('view-tab', this)">📊 Статистика зборів</button>
+        <button onclick="switchTab('admin-tab', this)">⚙️ Адмін-панель</button>
+    </div>
+
+    <!-- ВКЛАДКА 1: ПЕРЕГЛЯД ТА СТАТИСТИКА БАТЬКІВ -->
+    <div id="view-tab" class="tab-content active">
+        <div class="card">
+            <label><b>Оберіть збір для аналізу:</b></label>
+            <select id="parent-collection-filter" onchange="renderParentView()"></select>
+        </div>
+
+        <div class="card" id="stats-card">
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="title">План з дитини</div>
+                    <div class="val" id="stat-target">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Всього зібрано</div>
+                    <div class="val" id="stat-total-collected">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Загальний план класу</div>
+                    <div class="val" id="stat-total-target">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Прогрес збору</div>
+                    <div class="val" id="stat-progress">0%</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>№</th>
+                        <th>Учень</th>
+                        <th>Сплачено</th>
+                        <th>Статус / Залишок</th>
+                    </tr>
+                </thead>
+                <tbody id="parent-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 2: АДМІНІСТРУВАННЯ -->
+    <div id="admin-tab" class="tab-content">
+        <div class="card">
+            <h3>➕ Створити новий збір</h3>
+            <label>Назва збору:</label>
+            <input type="text" id="new-coll-name" placeholder="напр. Екскурсія в музей">
+            <label>Потрібно з дитини (грн):</label>
+            <input type="number" id="new-coll-target" placeholder="200">
+            <button class="form-btn" onclick="createCollection()">Додати збір</button>
+        </div>
+
+        <div class="card">
+            <h3>💳 Внести / оновити оплату</h3>
+            <label>Оберіть збір:</label>
+            <select id="select-collection"></select>
+            
+            <label>Оберіть учня:</label>
+            <select id="select-student"></select>
+            
+            <label>Внести суму (грн):</label>
+            <input type="number" id="pay-amount" placeholder="500">
+            <button class="form-btn" onclick="savePayment()">Зберегти оплату</button>
+        </div>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
+        let globalData = null;
+
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            btn.classList.add('active');
+        }
+
         async function loadData() {
             const res = await fetch('/api/budget');
-            const data = await res.json();
-            const tbody = document.getElementById('table-body');
+            globalData = await res.json();
+            
+            // Заповнення списку зборів для батьків
+            const pSelect = document.getElementById('parent-collection-filter');
+            pSelect.innerHTML = '<option value="all">🌐 Зведений звіт (Всі збори)</option>';
+            globalData.collections.forEach(c => {
+                pSelect.innerHTML += `<option value="${c.id}">📁 ${c.name}</option>`;
+            });
+
+            // Заповнення селектів для адмінки
+            const collSelect = document.getElementById('select-collection');
+            collSelect.innerHTML = '';
+            globalData.collections.forEach(c => {
+                collSelect.innerHTML += `<option value="${c.id}">${c.name} (${c.target_amount} грн/учень)</option>`;
+            });
+
+            const studSelect = document.getElementById('select-student');
+            studSelect.innerHTML = '';
+            globalData.students.forEach(s => {
+                studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
+            });
+
+            renderParentView();
+        }
+
+        function renderParentView() {
+            if(!globalData) return;
+            const selectedId = document.getElementById('parent-collection-filter').value;
+            const tbody = document.getElementById('parent-table-body');
             tbody.innerHTML = '';
 
-            data.forEach(s => {
-                const balClass = s.balance >= 0 ? 'plus' : 'minus';
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${s.id}</td>
-                        <td><b>${s.full_name}</b></td>
-                        <td>${s.parent_name}</td>
-                        <td>${s.fund_paid} грн</td>
-                        <td>${s.total_paid} грн</td>
-                        <td><span class="badge ${balClass}">${s.balance} грн</span></td>
-                    </tr>
-                `;
-            });
+            if (selectedId === 'all') {
+                // Зведений режим
+                let totalCollectedAll = 0;
+                let totalTargetAll = 0;
+
+                globalData.students.forEach(s => {
+                    totalCollectedAll += s.total_paid;
+                    totalTargetAll += s.total_required;
+                    const balClass = s.balance >= 0 ? 'plus' : 'minus';
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${s.id}</td>
+                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                            <td>${s.total_paid} грн</td>
+                            <td><span class="badge ${balClass}">${s.balance >= 0 ? '+' : ''}${s.balance} грн</span></td>
+                        </tr>
+                    `;
+                });
+
+                document.getElementById('stat-target').innerText = '-';
+                document.getElementById('stat-total-collected').innerText = `${totalCollectedAll} грн`;
+                document.getElementById('stat-total-target').innerText = `${totalTargetAll} грн`;
+                const progress = totalTargetAll > 0 ? Math.round((totalCollectedAll / totalTargetAll) * 100) : 100;
+                document.getElementById('stat-progress').innerText = `${progress}%`;
+
+            } else {
+                // Режим конкретного збору
+                const collId = parseInt(selectedId);
+                const coll = globalData.collections.find(c => c.id === collId);
+                let totalCollected = 0;
+                const studentCount = globalData.students.length;
+                const totalTarget = (coll.target_amount || 0) * studentCount;
+
+                globalData.students.forEach(s => {
+                    const pay = s.payments[collId] || { required: coll.target_amount, paid: 0 };
+                    totalCollected += pay.paid;
+                    const bal = pay.paid - pay.required;
+                    const balClass = bal >= 0 ? 'plus' : 'minus';
+                    const statusText = bal >= 0 ? (pay.required > 0 ? 'Сплачено' : 'Внесок') : `Заборгованість: ${Math.abs(bal)} грн`;
+
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${s.id}</td>
+                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                            <td>${pay.paid} / ${pay.required} грн</td>
+                            <td><span class="badge ${balClass}">${statusText}</span></td>
+                        </tr>
+                    `;
+                });
+
+                document.getElementById('stat-target').innerText = `${coll.target_amount} грн`;
+                document.getElementById('stat-total-collected').innerText = `${totalCollected} грн`;
+                document.getElementById('stat-total-target').innerText = `${totalTarget} грн`;
+                const progress = totalTarget > 0 ? Math.round((totalCollected / totalTarget) * 100) : (totalCollected > 0 ? 100 : 0);
+                document.getElementById('stat-progress').innerText = `${progress}%`;
+            }
         }
+
+        async function createCollection() {
+            const name = document.getElementById('new-coll-name').value;
+            const target = document.getElementById('new-coll-target').value;
+            if(!name) return alert('Вкажіть назву збору!');
+            
+            await fetch('/api/add_collection', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, target_amount: parseFloat(target || 0)})
+            });
+            alert('Збір успішно створено!');
+            document.getElementById('new-coll-name').value = '';
+            document.getElementById('new-coll-target').value = '';
+            loadData();
+        }
+
+        async function savePayment() {
+            const collection_id = document.getElementById('select-collection').value;
+            const student_id = document.getElementById('select-student').value;
+            const paid = document.getElementById('pay-amount').value;
+            if(!paid) return alert('Вкажіть суму!');
+
+            await fetch('/api/save_payment', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({student_id, collection_id, paid: parseFloat(paid)})
+            });
+            alert('Оплату збережено!');
+            document.getElementById('pay-amount').value = '';
+            loadData();
+        }
+
         loadData();
     </script>
 </body>
@@ -154,40 +331,99 @@ def index():
 def get_budget():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
+    c.execute("SELECT id, name, target_amount FROM collections")
+    colls = [
+        {"id": row[0], "name": row[1], "target_amount": row[2]}
+        for row in c.fetchall()
+    ]
+
     c.execute("SELECT id, full_name, parent_name FROM students")
     students = c.fetchall()
 
-    result = []
+    student_list = []
     for s in students:
         s_id, full_name, parent_name = s
+
+        # Деталізація за кожним збором окремо
         c.execute(
-            "SELECT SUM(paid), SUM(required) FROM payments WHERE student_id=?",
+            "SELECT collection_id, required, paid FROM payments WHERE"
+            " student_id=?",
             (s_id,),
         )
-        row = c.fetchone()
-        total_paid = row[0] or 0
-        total_req = row[1] or 0
+        p_rows = c.fetchall()
+        payments_dict = {}
+        total_paid = 0
+        total_required = 0
 
-        c.execute(
-            "SELECT SUM(p.paid) FROM payments p JOIN collections c ON"
-            " p.collection_id=c.id WHERE p.student_id=? AND c.is_class_fund=1",
-            (s_id,),
-        )
-        fund_paid = c.fetchone()[0] or 0
+        for pr in p_rows:
+            c_id, req, paid = pr
+            payments_dict[c_id] = {"required": req, "paid": paid}
+            total_paid += paid
+            total_required += req
 
-        result.append({
+        student_list.append({
             "id": s_id,
             "full_name": full_name,
             "parent_name": parent_name,
-            "fund_paid": fund_paid,
+            "payments": payments_dict,
             "total_paid": total_paid,
-            "balance": total_paid - total_req,
+            "total_required": total_required,
+            "balance": total_paid - total_required,
         })
+
     conn.close()
-    return jsonify(result)
+    return jsonify({"students": student_list, "collections": colls})
 
 
-# --- TELEGRAM BOT HANDLER ---
+@app.route("/api/add_collection", methods=["POST"])
+def add_collection():
+    data = request.json
+    name = data.get("name")
+    target = data.get("target_amount", 0)
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO collections (name, target_amount) VALUES (?, ?)",
+        (name, target),
+    )
+    coll_id = c.lastrowid
+
+    c.execute("SELECT id FROM students")
+    students = c.fetchall()
+    for s in students:
+        c.execute(
+            "INSERT INTO payments (student_id, collection_id, required, paid)"
+            " VALUES (?, ?, ?, 0)",
+            (s[0], coll_id, target),
+        )
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/save_payment", methods=["POST"])
+def save_payment():
+    data = request.json
+    s_id = data.get("student_id")
+    c_id = data.get("collection_id")
+    paid = data.get("paid", 0)
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO payments (student_id, collection_id, paid) VALUES (?,"
+        " ?, ?) ON CONFLICT(student_id, collection_id) DO UPDATE SET"
+        " paid=paid+EXCLUDED.paid",
+        (s_id, c_id, paid),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [
