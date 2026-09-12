@@ -1,17 +1,36 @@
 import asyncio
 import os
 import sqlite3
-from flask import Flask, jsonify, render_template_string, request
+from flask import (
+    Flask,
+    jsonify,
+    render_template_string,
+    request,
+    send_from_directory,
+)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from werkzeug.utils import secure_filename
 
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
 # 🔴 Список Telegram ID адміністраторів
-ADMIN_IDS = [945268466]
+ADMIN_IDS = [123456789, 987654321]
 
 DB_FILE = "class_budget.db"
+UPLOAD_FOLDER = "receipts"
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf"}
+
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+
+def allowed_file(filename):
+    return (
+        "." in filename
+        and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+    )
 
 
 def init_db():
@@ -39,9 +58,16 @@ def init_db():
                     collection_id INTEGER,
                     required REAL DEFAULT 0,
                     paid REAL DEFAULT 0,
+                    receipt_filename TEXT,
                     PRIMARY KEY (student_id, collection_id)
                 )"""
     )
+
+    # Спроба додати колонку receipt_filename, якщо БД вже створена раніше
+    try:
+        c.execute("ALTER TABLE payments ADD COLUMN receipt_filename TEXT")
+    except sqlite3.OperationalError:
+        pass  # Колонка вже існує
 
     c.execute("SELECT COUNT(*) FROM students")
     if c.fetchone()[0] == 0:
@@ -73,6 +99,7 @@ def init_db():
 init_db()
 
 app = Flask(__name__)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -98,11 +125,13 @@ HTML_TEMPLATE = """
         th, td { border: 1px solid #e0e0e0; padding: 8px; text-align: left; }
         th { background: #007aff; color: white; }
         select, input, button.form-btn { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
-        button.form-btn { background: #34c759; color: white; border: none; font-weight: bold; }
-        button.danger-btn { background: #ff3b30; color: white; border: none; font-weight: bold; }
+        button.form-btn { background: #34c759; color: white; border: none; font-weight: bold; cursor: pointer; }
+        button.danger-btn { background: #ff3b30; color: white; border: none; font-weight: bold; cursor: pointer; }
         .badge { padding: 3px 6px; border-radius: 4px; font-weight: bold; }
         .plus { background: #d4edda; color: #155724; }
         .minus { background: #f8d7da; color: #721c24; }
+        .info-text { font-size: 12px; color: #007aff; margin-top: -6px; margin-bottom: 10px; font-weight: 500; }
+        .receipt-link { font-size: 12px; color: #007aff; text-decoration: underline; font-weight: bold; display: block; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -174,16 +203,22 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="card">
-            <h3>💳 Внести / оновити оплату</h3>
+            <h3>💳 Внести / Редагувати оплату</h3>
             <label>Оберіть збір:</label>
-            <select id="select-collection"></select>
+            <select id="select-collection" onchange="updatePaymentInput()"></select>
             
             <label>Оберіть учня:</label>
-            <select id="select-student"></select>
+            <select id="select-student" onchange="updatePaymentInput()"></select>
             
-            <label>Внести суму (грн):</label>
+            <label>Сума внеску (грн):</label>
+            <div class="info-text" id="current-paid-hint">Поточна сплачена сума: 0 грн</div>
             <input type="number" id="pay-amount" placeholder="200">
-            <button class="form-btn" onclick="savePayment()">Зберегти оплату</button>
+
+            <label>🧾 Квитанція / Чек (опційно):</label>
+            <input type="file" id="receipt-file" accept="image/*,.pdf">
+            <div class="info-text" id="current-receipt-hint"></div>
+
+            <button class="form-btn" onclick="savePayment()">Зберегти (Оновити суму)</button>
         </div>
 
         <div class="card" style="border: 1px solid #ffcccc;">
@@ -245,9 +280,32 @@ HTML_TEMPLATE = """
                 globalData.students.forEach(s => {
                     studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
                 });
+
+                updatePaymentInput();
             }
 
             renderParentView();
+        }
+
+        function updatePaymentInput() {
+            if(!globalData || !globalData.is_admin) return;
+            const cId = parseInt(document.getElementById('select-collection').value);
+            const sId = parseInt(document.getElementById('select-student').value);
+            
+            if(!cId || !sId) return;
+
+            const student = globalData.students.find(s => s.id === sId);
+            const payData = (student && student.payments[cId]) ? student.payments[cId] : { paid: 0, receipt: null };
+
+            document.getElementById('pay-amount').value = payData.paid;
+            document.getElementById('current-paid-hint').innerText = `Поточна сплачена сума у базі: ${payData.paid} грн`;
+
+            const rHint = document.getElementById('current-receipt-hint');
+            if(payData.receipt) {
+                rHint.innerHTML = `📎 Є завантажена квитанція: <a href="/uploads/${payData.receipt}" target="_blank">Переглянути</a>`;
+            } else {
+                rHint.innerText = 'Квитанцію ще не прикріплено';
+            }
         }
 
         function renderParentView() {
@@ -290,17 +348,22 @@ HTML_TEMPLATE = """
                 const totalTarget = (coll.target_amount || 0) * studentCount;
 
                 globalData.students.forEach(s => {
-                    const pay = s.payments[collId] || { required: coll.target_amount, paid: 0 };
+                    const pay = s.payments[collId] || { required: coll.target_amount, paid: 0, receipt: null };
                     totalCollected += pay.paid;
                     const bal = pay.paid - pay.required;
                     const balClass = bal >= 0 ? 'plus' : 'minus';
                     const statusText = bal >= 0 ? (pay.required > 0 ? 'Сплачено' : 'Внесок') : `Заборгованість: ${Math.abs(bal)} грн`;
 
+                    let receiptHtml = '';
+                    if(pay.receipt) {
+                        receiptHtml = `<br><a class="receipt-link" href="/uploads/${pay.receipt}" target="_blank">🧾 Переглянути чек</a>`;
+                    }
+
                     tbody.innerHTML += `
                         <tr>
                             <td>${s.id}</td>
                             <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
-                            <td>${pay.paid} / ${pay.required} грн</td>
+                            <td>${pay.paid} / ${pay.required} грн ${receiptHtml}</td>
                             <td><span class="badge ${balClass}">${statusText}</span></td>
                         </tr>
                     `;
@@ -343,19 +406,31 @@ HTML_TEMPLATE = """
             const collection_id = document.getElementById('select-collection').value;
             const student_id = document.getElementById('select-student').value;
             const paid = document.getElementById('pay-amount').value;
+            const fileInput = document.getElementById('receipt-file');
+
             if(!collection_id) return alert('Оберіть активний збір!');
-            if(!paid) return alert('Вкажіть суму!');
+            if(paid === '') return alert('Вкажіть суму!');
+
+            const formData = new FormData();
+            formData.append('user_id', currentUserId);
+            formData.append('student_id', student_id);
+            formData.append('collection_id', collection_id);
+            formData.append('paid', paid);
+
+            if(fileInput.files.length > 0) {
+                formData.append('receipt', fileInput.files[0]);
+            }
 
             const res = await fetch('/api/save_payment', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({user_id: currentUserId, student_id, collection_id, paid: parseFloat(paid)})
+                body: formData
             });
+
             const ans = await res.json();
             if(ans.error) return alert(ans.error);
 
-            alert('Оплату збережено!');
-            document.getElementById('pay-amount').value = '';
+            alert('Оплату успішно збережено!');
+            fileInput.value = '';
             loadData();
         }
 
@@ -389,6 +464,11 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
+@app.route("/uploads/<filename>")
+def uploaded_file(filename):
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+
 @app.route("/api/budget")
 def get_budget():
     user_id = int(request.args.get("user_id", 0))
@@ -416,8 +496,8 @@ def get_budget():
         s_id, full_name, parent_name = s
 
         c.execute(
-            "SELECT collection_id, required, paid FROM payments WHERE"
-            " student_id=?",
+            "SELECT collection_id, required, paid, receipt_filename FROM"
+            " payments WHERE student_id=?",
             (s_id,),
         )
         p_rows = c.fetchall()
@@ -426,8 +506,12 @@ def get_budget():
         total_required = 0
 
         for pr in p_rows:
-            c_id, req, paid = pr
-            payments_dict[c_id] = {"required": req, "paid": paid}
+            c_id, req, paid, receipt = pr
+            payments_dict[c_id] = {
+                "required": req,
+                "paid": paid,
+                "receipt": receipt,
+            }
             total_paid += paid
             total_required += req
 
@@ -486,24 +570,42 @@ def add_collection():
 
 @app.route("/api/save_payment", methods=["POST"])
 def save_payment():
-    data = request.json
-    user_id = int(data.get("user_id", 0))
+    user_id = int(request.form.get("user_id", 0))
 
     if user_id not in ADMIN_IDS:
         return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
 
-    s_id = data.get("student_id")
-    c_id = data.get("collection_id")
-    paid = data.get("paid", 0)
+    s_id = request.form.get("student_id")
+    c_id = request.form.get("collection_id")
+    paid = float(request.form.get("paid", 0))
+
+    filename = None
+    if "receipt" in request.files:
+        file = request.files["receipt"]
+        if file and allowed_file(file.filename):
+            ext = file.filename.rsplit(".", 1)[1].lower()
+            filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute(
-        "INSERT INTO payments (student_id, collection_id, paid) VALUES (?,"
-        " ?, ?) ON CONFLICT(student_id, collection_id) DO UPDATE SET"
-        " paid=paid+EXCLUDED.paid",
-        (s_id, c_id, paid),
-    )
+
+    if filename:
+        c.execute(
+            "INSERT INTO payments (student_id, collection_id, paid,"
+            " receipt_filename) VALUES (?, ?, ?, ?) ON CONFLICT(student_id,"
+            " collection_id) DO UPDATE SET paid=EXCLUDED.paid,"
+            " receipt_filename=EXCLUDED.receipt_filename",
+            (s_id, c_id, paid, filename),
+        )
+    else:
+        c.execute(
+            "INSERT INTO payments (student_id, collection_id, paid) VALUES (?,"
+            " ?, ?) ON CONFLICT(student_id, collection_id) DO UPDATE SET"
+            " paid=EXCLUDED.paid",
+            (s_id, c_id, paid),
+        )
+
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
