@@ -47,7 +47,7 @@ def get_drive_service():
         return None
 
 def upload_file_to_drive(file_storage, filename):
-    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ: {filename}")
+    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ НА GOOGLE DRIVE: {filename}")
     
     if not GOOGLE_CREDENTIALS_JSON:
         print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_CREDENTIALS_JSON у Render!")
@@ -1767,13 +1767,15 @@ def add_expense():
     amount = float(request.form.get('amount', 0))
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
+    print("📋 [EXPENSE] Отримані ключі у request.files:", list(request.files.keys()))
+
     drive_link = None
     drive_status = 'none'
 
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 Отримано файл: {file.filename}")
+            print(f"📥 [EXPENSE] Отримано файл: {file.filename}")
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1783,6 +1785,10 @@ def add_expense():
                 drive_status = 'success'
             else:
                 drive_status = 'error'
+        else:
+            print("⚠️ [EXPENSE] Ключ 'receipt' є, але файл порожній або ім'я відсутнє.")
+    else:
+        print("⚠️ [EXPENSE] Ключ 'receipt' ВІДСУТНІЙ у request.files!")
 
     conn = get_db_connection()
     if not conn:
@@ -1977,13 +1983,15 @@ def save_payment():
     c_id = request.form.get('collection_id')
     paid = float(request.form.get('paid', 0))
 
+    print("📋 [PAYMENT] Отримані ключі у request.files:", list(request.files.keys()))
+
     drive_link = None
     drive_status = 'none'
 
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 Отримано квитанцію: {file.filename}")
+            print(f"📥 [PAYMENT] Отримано квитанцію: {file.filename}")
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -1992,6 +2000,10 @@ def save_payment():
                 drive_status = 'success'
             else:
                 drive_status = 'error'
+        else:
+            print("⚠️ [PAYMENT] Ключ 'receipt' є, але файл порожній або ім'я відсутнє.")
+    else:
+        print("⚠️ [PAYMENT] Ключ 'receipt' ВІДСУТНІЙ у request.files!")
 
     conn = get_db_connection()
     if not conn:
