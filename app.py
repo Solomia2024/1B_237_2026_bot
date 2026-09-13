@@ -11,16 +11,14 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
-# 🔴 Рядок підключення до PostgreSQL (зчитується з Environment Variable на Render)
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Прибираємо параметр channel_binding, якщо він є у рядку
 if "channel_binding=" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.split("&channel_binding=")[0]
 
-# 🔴 Список Telegram ID адміністраторів (Артем та другий адмін)
+# 🔴 Список Telegram ID адміністраторів
 ADMIN_IDS = [945268466, 114251065]
 
 UPLOAD_FOLDER = 'receipts'
@@ -175,7 +173,7 @@ HTML_TEMPLATE = """
         <button id="admin-tab-btn" style="display:none;" onclick="switchTab('admin-tab', this)">⚙️ Адмінка</button>
     </div>
 
-    <!-- ВКЛАДКА 1: УЧНІ (ДЛЯ БАТЬКІВ) -->
+    <!-- ВКЛАДКА 1: УЧНІ -->
     <div id="view-tab" class="tab-content active">
         <div class="card">
             <label><b>Оберіть збір для аналізу:</b></label>
@@ -322,7 +320,7 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ВКЛАДКА 4: ДЕТАЛІЗАЦІЯ ПО УЧНЮ (ДЛЯ АДМІНА) -->
+    <!-- ВКЛАДКА 4: ДЕТАЛІЗАЦІЯ ПО УЧНЮ (АДМІН) -->
     <div id="student-detail-tab" class="tab-content">
         <div class="card" style="border: 2px solid #007aff;">
             <h3>👤 Персональна статистика учня</h3>
@@ -353,7 +351,7 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ВКЛАДКА 5: КОНТАКТИ ТА КЕРУВАННЯ УЧНЯМИ (ДЛЯ АДМІНА) -->
+    <!-- ВКЛАДКА 5: КОНТАКТИ (АДМІН) -->
     <div id="contacts-tab" class="tab-content">
         <div class="card" style="border: 1px solid #34c759;">
             <h3 id="student-form-title">➕ Додати нового учня</h3>
@@ -495,7 +493,15 @@ HTML_TEMPLATE = """
 
         let globalData = null;
         let myChart = null;
-        let currentUserId = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0;
+
+        // 🔴 Зчитування Telegram ID з перевіркою параметрів URL або Telegram SDK
+        let rawUserId = (tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : 0;
+        let currentUserId = parseInt(rawUserId) || 0;
+
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('user_id')) {
+            currentUserId = parseInt(urlParams.get('user_id')) || currentUserId;
+        }
 
         document.getElementById('expense-date').valueAsDate = new Date();
         document.getElementById('stud-date-added').valueAsDate = new Date();
@@ -518,11 +524,11 @@ HTML_TEMPLATE = """
             const targetBox = document.getElementById('target-amount-box');
             const studentSelectionBox = document.getElementById('student-selection-box');
 
-            if(typeVal === '2') { // За бажанням
+            if(typeVal === '2') {
                 targetBox.style.display = 'none';
                 studentSelectionBox.style.display = 'none';
                 document.getElementById('new-coll-target').value = '0';
-            } else if(typeVal === '3') { // Окремі учні
+            } else if(typeVal === '3') {
                 targetBox.style.display = 'block';
                 studentSelectionBox.style.display = 'block';
                 renderStudentCheckboxes();
@@ -561,7 +567,8 @@ HTML_TEMPLATE = """
                 document.getElementById('admin-tab-btn').style.display = 'block';
                 document.getElementById('student-detail-tab-btn').style.display = 'block';
                 document.getElementById('contacts-tab-btn').style.display = 'block';
-                document.getElementById('exp-actions-th').style.display = 'table-cell';
+                const expActions = document.getElementById('exp-actions-th');
+                if(expActions) expActions.style.display = 'table-cell';
             }
 
             const pSelect = document.getElementById('parent-collection-filter');
@@ -789,7 +796,7 @@ HTML_TEMPLATE = """
         async function toggleStudentActive(student_id, current_status) {
             const new_status = current_status ? 0 : 1;
             const confirmMsg = current_status ? 
-                'Ви дійсно бажаєте перевести учня у статус "Вибув"? Його не буде видно в списках батьків, але історія збережеться.' : 
+                'Ви дійсно бажаєте перевести учня у статус "Вибув"?Його не буде видно в списках батьків, але історія збережеться.' : 
                 'Відновити активний статус учня?';
 
             if(!confirm(confirmMsg)) return;
@@ -1347,7 +1354,11 @@ def uploaded_file(filename):
 
 @app.route('/api/budget')
 def get_budget():
-    user_id = int(request.args.get('user_id', 0))
+    try:
+        user_id = int(request.args.get('user_id', 0))
+    except (ValueError, TypeError):
+        user_id = 0
+
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
 
