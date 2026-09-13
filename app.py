@@ -1,12 +1,18 @@
 import os
+import io
+import json
 import asyncio
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, render_template_string, request, jsonify, send_from_directory
+from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com").rstrip('/')
@@ -18,18 +24,70 @@ if DATABASE_URL.startswith("postgres://"):
 if "channel_binding=" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.split("&channel_binding=")[0]
 
-# 🔴 Головні адміністратори (завжди мають доступ і не можуть бути видалені з вебу)
+# 🔴 Параметри Google Drive
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+
+# 🔴 Головні адміністратори
 DEFAULT_ADMIN_IDS = [945268466, 114251065]
 
-UPLOAD_FOLDER = 'receipts'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
-
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# --- Робота з Google Drive ---
+def get_drive_service():
+    if not GOOGLE_CREDENTIALS_JSON:
+        return None
+    try:
+        creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+        creds = Credentials.from_service_account_info(
+            creds_dict,
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        return build('drive', 'v3', credentials=creds)
+    except Exception as e:
+        print(f"Помилка авторизації Google Drive: {e}")
+        return None
+
+def upload_file_to_drive(file_storage, filename):
+    service = get_drive_service()
+    if not service or not GOOGLE_DRIVE_FOLDER_ID:
+        print("Google Drive не налаштовано або відсутній GOOGLE_DRIVE_FOLDER_ID")
+        return None
+
+    try:
+        file_metadata = {
+            'name': filename,
+            'parents': [GOOGLE_DRIVE_FOLDER_ID]
+        }
+        
+        file_bytes = file_storage.read()
+        media = MediaIoBaseUpload(
+            io.BytesIO(file_bytes),
+            mimetype=file_storage.mimetype or 'application/octet-stream',
+            resumable=True
+        )
+        
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
+
+        # Робимо файл публічно доступним для перегляду
+        service.permissions().create(
+            fileId=file.get('id'),
+            body={'type': 'anyone', 'role': 'reader'}
+        ).execute()
+
+        return file.get('webViewLink')
+    except Exception as e:
+        print(f"Помилка завантаження файлу на Google Диск: {e}")
+        return None
+
+# --- Робота з Базою Даних ---
 def get_db_connection():
     if not DATABASE_URL:
         return None
@@ -151,7 +209,6 @@ except Exception as e:
     print(f"Помилка при ініціалізації БД: {e}")
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -426,7 +483,6 @@ HTML_TEMPLATE = """
 
     <!-- ВКЛАДКА 6: АДМІНІСТРУВАННЯ -->
     <div id="admin-tab" class="tab-content">
-        <!-- БЛОК УПРАВЛІННЯ АДМІНАМИ -->
         <div class="card" style="border: 2px solid #ff9500;">
             <h3>👑 Управління адміністраторами</h3>
             <label>Telegram ID нового адміна:</label>
@@ -486,7 +542,7 @@ HTML_TEMPLATE = """
             <div class="info-text" id="current-paid-hint">Поточна сплачена сума: 0 грн</div>
             <input type="number" id="pay-amount" placeholder="200">
 
-            <label>🧾 Квитанція / Чек (опційно):</label>
+            <label>🧾 Квитанція / Чек (Google Drive):</label>
             <input type="file" id="receipt-file" accept="image/*,.pdf">
             <div class="info-text" id="current-receipt-hint"></div>
 
@@ -509,7 +565,7 @@ HTML_TEMPLATE = """
             <label>Дата витрати:</label>
             <input type="date" id="expense-date">
 
-            <label>🧾 Чек / Квитанція (опційно):</label>
+            <label>🧾 Чек / Квитанція (Google Drive):</label>
             <input type="file" id="expense-receipt-file" accept="image/*,.pdf">
             <div class="info-text" id="current-exp-receipt-hint"></div>
 
@@ -1017,7 +1073,7 @@ HTML_TEMPLATE = """
 
             const rHint = document.getElementById('current-receipt-hint');
             if(payData.receipt) {
-                rHint.innerHTML = `📎 Є завантажена квитанція: <a href="/uploads/${payData.receipt}" target="_blank">Переглянути</a>`;
+                rHint.innerHTML = `📎 Чек на Google Drive: <a href="${payData.receipt}" target="_blank">Переглянути</a>`;
             } else {
                 rHint.innerText = 'Квитанцію ще не прикріплено';
             }
@@ -1149,7 +1205,7 @@ HTML_TEMPLATE = """
 
                     let receiptHtml = '';
                     if(currentPay.receipt) {
-                        receiptHtml = `<br><a class="receipt-link" href="/uploads/${currentPay.receipt}" target="_blank">🧾 Переглянути чек</a>`;
+                        receiptHtml = `<br><a class="receipt-link" href="${currentPay.receipt}" target="_blank">🧾 Переглянути чек</a>`;
                     }
 
                     tbody.innerHTML += `
@@ -1246,7 +1302,7 @@ HTML_TEMPLATE = """
             let sumExp = 0;
             filteredExpenses.forEach(e => {
                 sumExp += parseFloat(e.amount);
-                let rHtml = e.receipt ? `<a class="receipt-link" href="/uploads/${e.receipt}" target="_blank">🧾 Чек</a>` : '-';
+                let rHtml = e.receipt ? `<a class="receipt-link" href="${e.receipt}" target="_blank">🧾 Чек</a>` : '-';
                 
                 let actionsHtml = '';
                 if(globalData.is_admin) {
@@ -1293,7 +1349,7 @@ HTML_TEMPLATE = """
 
             const hint = document.getElementById('current-exp-receipt-hint');
             if(exp.receipt) {
-                hint.innerHTML = `📎 Поточний чек: <a href="/uploads/${exp.receipt}" target="_blank">Переглянути</a>`;
+                hint.innerHTML = `📎 Чек на Google Drive: <a href="${exp.receipt}" target="_blank">Переглянути</a>`;
             } else {
                 hint.innerText = '';
             }
@@ -1481,10 +1537,6 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
-
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route('/api/budget')
 def get_budget():
@@ -1695,14 +1747,14 @@ def add_expense():
     amount = float(request.form.get('amount', 0))
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
-    filename = None
+    drive_link = None
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and allowed_file(file.filename):
             ext = file.filename.rsplit('.', 1)[1].lower()
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            drive_link = upload_file_to_drive(file, filename)
 
     conn = get_db_connection()
     if not conn:
@@ -1710,15 +1762,15 @@ def add_expense():
     c = conn.cursor()
 
     if exp_id:
-        if filename:
+        if drive_link:
             c.execute("UPDATE expenses SET collection_id=%s, purpose=%s, amount=%s, date_str=%s, receipt_filename=%s WHERE id=%s", 
-                      (c_id, purpose, amount, date_str, filename, exp_id))
+                      (c_id, purpose, amount, date_str, drive_link, exp_id))
         else:
             c.execute("UPDATE expenses SET collection_id=%s, purpose=%s, amount=%s, date_str=%s WHERE id=%s", 
                       (c_id, purpose, amount, date_str, exp_id))
     else:
         c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str, receipt_filename) VALUES (%s, %s, %s, %s, %s)",
-                  (c_id, purpose, amount, date_str, filename))
+                  (c_id, purpose, amount, date_str, drive_link))
 
     conn.commit()
     c.close()
@@ -1897,25 +1949,25 @@ def save_payment():
     c_id = request.form.get('collection_id')
     paid = float(request.form.get('paid', 0))
 
-    filename = None
+    drive_link = None
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and allowed_file(file.filename):
             ext = file.filename.rsplit('.', 1)[1].lower()
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            drive_link = upload_file_to_drive(file, filename)
 
     conn = get_db_connection()
     if not conn:
         return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
 
-    if filename:
+    if drive_link:
         c.execute("""INSERT INTO payments (student_id, collection_id, paid, receipt_filename) 
                      VALUES (%s, %s, %s, %s) 
                      ON CONFLICT (student_id, collection_id) 
                      DO UPDATE SET paid=EXCLUDED.paid, receipt_filename=EXCLUDED.receipt_filename""",
-                  (s_id, c_id, paid, filename))
+                  (s_id, c_id, paid, drive_link))
     else:
         c.execute("""INSERT INTO payments (student_id, collection_id, paid) 
                      VALUES (%s, %s, %s) 
