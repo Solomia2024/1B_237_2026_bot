@@ -9,7 +9,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppI
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
-WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
+WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com").rstrip('/')
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL.startswith("postgres://"):
@@ -18,8 +18,8 @@ if DATABASE_URL.startswith("postgres://"):
 if "channel_binding=" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.split("&channel_binding=")[0]
 
-# 🔴 Список Telegram ID адміністраторів
-ADMIN_IDS = [945268466, 114251065]
+# 🔴 Головні адміністратори (завжди мають доступ і не можуть бути видалені з вебу)
+DEFAULT_ADMIN_IDS = [945268466, 114251065]
 
 UPLOAD_FOLDER = 'receipts'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
@@ -40,6 +40,27 @@ def get_db_connection():
         print(f"Помилка підключення до БД: {e}")
         return None
 
+def is_user_admin(user_id):
+    if not user_id:
+        return False
+    try:
+        u_id = int(user_id)
+    except (ValueError, TypeError):
+        return False
+
+    if u_id in DEFAULT_ADMIN_IDS:
+        return True
+
+    conn = get_db_connection()
+    if not conn:
+        return False
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM admins WHERE user_id=%s", (u_id,))
+    res = c.fetchone()
+    c.close()
+    conn.close()
+    return True if res else False
+
 def init_db():
     conn = get_db_connection()
     if not conn:
@@ -47,6 +68,14 @@ def init_db():
         return
 
     c = conn.cursor()
+
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (
+                    user_id BIGINT PRIMARY KEY,
+                    comment TEXT
+                )''')
+
+    for admin_id in DEFAULT_ADMIN_IDS:
+        c.execute("INSERT INTO admins (user_id, comment) VALUES (%s, %s) ON CONFLICT DO NOTHING", (admin_id, 'Головний адмін'))
 
     c.execute('''CREATE TABLE IF NOT EXISTS students (
                     id SERIAL PRIMARY KEY,
@@ -165,6 +194,7 @@ HTML_TEMPLATE = """
         .student-checkbox-list { max-height: 180px; overflow-y: auto; border: 1px solid #ccc; padding: 8px; border-radius: 6px; margin-bottom: 12px; background: #fafafa; }
         .student-checkbox-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; cursor: pointer; }
         .student-checkbox-item input { width: auto; margin: 0; }
+        .admin-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px dashed #eee; }
     </style>
 </head>
 <body>
@@ -396,6 +426,21 @@ HTML_TEMPLATE = """
 
     <!-- ВКЛАДКА 6: АДМІНІСТРУВАННЯ -->
     <div id="admin-tab" class="tab-content">
+        <!-- БЛОК УПРАВЛІННЯ АДМІНАМИ -->
+        <div class="card" style="border: 2px solid #ff9500;">
+            <h3>👑 Управління адміністраторами</h3>
+            <label>Telegram ID нового адміна:</label>
+            <input type="number" id="new-admin-id" placeholder="напр. 123456789">
+            
+            <label>Примітка / Ім'я:</label>
+            <input type="text" id="new-admin-comment" placeholder="напр. Олена (Голова ПК)">
+
+            <button class="form-btn" style="background:#ff9500;" onclick="addNewAdmin()">Додати адміністратора</button>
+
+            <h4 style="margin-top:15px; margin-bottom:8px;">Список діючих адмінів:</h4>
+            <div id="admin-list-container" style="font-size:13px;"></div>
+        </div>
+
         <div class="card">
             <h3>➕ Створити новий збір</h3>
             <label>Тип збору:</label>
@@ -584,6 +629,7 @@ HTML_TEMPLATE = """
                 document.getElementById('contacts-tab-btn').style.display = 'block';
                 const expActions = document.getElementById('exp-actions-th');
                 if(expActions) expActions.style.display = 'table-cell';
+                loadAdminsList();
             }
 
             const pSelect = document.getElementById('parent-collection-filter');
@@ -659,6 +705,67 @@ HTML_TEMPLATE = """
             renderParentView();
             renderCategoriesView();
             renderExpensesView();
+        }
+
+        async function loadAdminsList() {
+            if(!globalData || !globalData.is_admin) return;
+            const res = await fetch(`/api/get_admins?user_id=${currentUserId}`);
+            const data = await res.json();
+            
+            const container = document.getElementById('admin-list-container');
+            container.innerHTML = '';
+            
+            if(data.admins) {
+                data.admins.forEach(a => {
+                    let delBtn = `<button class="action-btn danger-btn" onclick="removeAdmin(${a.user_id})">🗑 Видалити</button>`;
+                    if(data.default_admins && data.default_admins.includes(a.user_id)) {
+                        delBtn = `<span class="badge neutral-badge">Головний</span>`;
+                    }
+                    container.innerHTML += `
+                        <div class="admin-item">
+                            <div><b>ID: ${a.user_id}</b> <small style="color:#666">(${a.comment || 'без примітки'})</small></div>
+                            <div>${delBtn}</div>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        async function addNewAdmin() {
+            const new_admin_id = document.getElementById('new-admin-id').value;
+            const comment = document.getElementById('new-admin-comment').value;
+
+            if(!new_admin_id) return alert('Вкажіть Telegram ID нового адміна!');
+
+            const res = await fetch('/api/add_admin', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: currentUserId, new_admin_id, comment })
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Адміністратора успішно додано!');
+            document.getElementById('new-admin-id').value = '';
+            document.getElementById('new-admin-comment').value = '';
+            loadAdminsList();
+        }
+
+        async function removeAdmin(del_admin_id) {
+            if(!confirm(`Ви дійсно бажаєте видалити права адміністратора для ID ${del_admin_id}?`)) return;
+
+            const res = await fetch('/api/delete_admin', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: currentUserId, del_admin_id })
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Адміністратора видалено!');
+            loadAdminsList();
         }
 
         function updateTransferHint() {
@@ -1389,7 +1496,7 @@ def get_budget():
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
 
-    is_admin = user_id in ADMIN_IDS
+    admin_status = is_user_admin(user_id)
 
     conn = get_db_connection()
     if not conn:
@@ -1402,7 +1509,7 @@ def get_budget():
                 'fund': {'target': 0, 'paid': 0, 'exp': 0, 'balance': 0},
                 'other': {'target': 0, 'paid': 0, 'exp': 0, 'balance': 0}
             },
-            'is_admin': is_admin
+            'is_admin': admin_status
         })
 
     c = conn.cursor()
@@ -1506,17 +1613,80 @@ def get_budget():
     conn.close()
     return jsonify({
         'students': active_student_list,
-        'all_students': all_student_list if is_admin else active_student_list,
+        'all_students': all_student_list if admin_status else active_student_list,
         'collections': colls,
         'expenses': expenses_list,
         'category_stats': category_stats,
-        'is_admin': is_admin
+        'is_admin': admin_status
     })
+
+@app.route('/api/get_admins')
+def get_admins():
+    user_id = int(request.args.get('user_id', 0))
+    if not is_user_admin(user_id):
+        return jsonify({'error': 'Доступ заборонено!'}), 403
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'admins': [], 'default_admins': DEFAULT_ADMIN_IDS})
+    c = conn.cursor()
+    c.execute("SELECT user_id, comment FROM admins ORDER BY user_id ASC")
+    admins = c.fetchall()
+    c.close()
+    conn.close()
+    return jsonify({'admins': admins, 'default_admins': DEFAULT_ADMIN_IDS})
+
+@app.route('/api/add_admin', methods=['POST'])
+def add_admin():
+    data = request.json
+    user_id = int(data.get('user_id', 0))
+    if not is_user_admin(user_id):
+        return jsonify({'error': 'Доступ заборонено!'})
+
+    new_admin_id = data.get('new_admin_id')
+    comment = data.get('comment', 'Адміністратор')
+
+    try:
+        new_admin_id = int(new_admin_id)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Вкажіть числовий Telegram ID!'})
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
+    c = conn.cursor()
+    c.execute("INSERT INTO admins (user_id, comment) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET comment=EXCLUDED.comment", (new_admin_id, comment))
+    conn.commit()
+    c.close()
+    conn.close()
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/delete_admin', methods=['POST'])
+def delete_admin():
+    data = request.json
+    user_id = int(data.get('user_id', 0))
+    if not is_user_admin(user_id):
+        return jsonify({'error': 'Доступ заборонено!'})
+
+    del_admin_id = int(data.get('del_admin_id', 0))
+
+    if del_admin_id in DEFAULT_ADMIN_IDS:
+        return jsonify({'error': 'Неможливо видалити головного адміністратора!'})
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
+    c = conn.cursor()
+    c.execute("DELETE FROM admins WHERE user_id=%s", (del_admin_id,))
+    conn.commit()
+    c.close()
+    conn.close()
+    return jsonify({'status': 'ok'})
 
 @app.route('/api/add_expense', methods=['POST'])
 def add_expense():
     user_id = int(request.form.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     exp_id = request.form.get('id')
@@ -1559,7 +1729,7 @@ def add_expense():
 def delete_expense():
     data = request.json
     user_id = int(data.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     exp_id = data.get('expense_id')
@@ -1578,7 +1748,7 @@ def delete_expense():
 def transfer_to_fund():
     data = request.json
     user_id = int(data.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     c_id = data.get('collection_id')
@@ -1624,7 +1794,7 @@ def transfer_to_fund():
 def save_student():
     data = request.json
     user_id = int(data.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     s_id = data.get('id')
@@ -1662,7 +1832,7 @@ def save_student():
 def toggle_student_active():
     data = request.json
     user_id = int(data.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     s_id = data.get('student_id')
@@ -1682,7 +1852,7 @@ def toggle_student_active():
 def add_collection():
     data = request.json
     user_id = int(data.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     name = data.get('name')
@@ -1720,7 +1890,7 @@ def add_collection():
 @app.route('/api/save_payment', methods=['POST'])
 def save_payment():
     user_id = int(request.form.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     s_id = request.form.get('student_id')
@@ -1762,7 +1932,7 @@ def save_payment():
 def delete_collection():
     data = request.json
     user_id = int(data.get('user_id', 0))
-    if user_id not in ADMIN_IDS:
+    if not is_user_admin(user_id):
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     c_id = data.get('collection_id')
@@ -1781,7 +1951,8 @@ def delete_collection():
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    app_url_with_id = f"{WEB_APP_URL}?user_id={user_id}"
+    clean_url = WEB_APP_URL.replace('[', '').replace(']', '').split('(')[0].strip()
+    app_url_with_id = f"{clean_url}?user_id={user_id}"
     
     kb = [[InlineKeyboardButton("📊 Відкрити бюджет класу", web_app=WebAppInfo(url=app_url_with_id))]]
     await update.message.reply_text("👋 Вітаємо в системі обліку бюджету 1-Б класу!\nНатисніть кнопку нижче для перегляду:", reply_markup=InlineKeyboardMarkup(kb))
