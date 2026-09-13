@@ -39,10 +39,12 @@ def init_db():
     c = conn.cursor()
     c.execute(
         """CREATE TABLE IF NOT EXISTS students (
-                    id INTEGER PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     full_name TEXT NOT NULL,
                     parent_name TEXT,
-                    phone TEXT
+                    phone TEXT,
+                    date_added TEXT NOT NULL,
+                    is_active INTEGER DEFAULT 1
                 )"""
     )
     c.execute(
@@ -50,7 +52,8 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
                     is_class_fund INTEGER DEFAULT 0,
-                    target_amount REAL DEFAULT 0
+                    target_amount REAL DEFAULT 0,
+                    created_at TEXT NOT NULL
                 )"""
     )
     c.execute(
@@ -74,34 +77,55 @@ def init_db():
                 )"""
     )
 
+    # Міграція колонок для існуючих таблиць
     try:
-        c.execute("ALTER TABLE payments ADD COLUMN receipt_filename TEXT")
+        c.execute(
+            "ALTER TABLE students ADD COLUMN date_added TEXT DEFAULT"
+            " '2026-01-01'"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE students ADD COLUMN is_active INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute(
+            "ALTER TABLE collections ADD COLUMN created_at TEXT DEFAULT"
+            " '2026-01-01'"
+        )
     except sqlite3.OperationalError:
         pass
 
     c.execute("SELECT COUNT(*) FROM students")
     if c.fetchone()[0] == 0:
         students = [
-            (1, "Акобян Мане", "Лілія Маргарян", "+380671818081"),
-            (2, "Ахмедова Мілана", "Севіна Ахмедова", "+380972845351"),
-            (3, "Бурнаш Анастасія", "Ірина Лісняк", "+380504103930"),
-            (4, "Головко Вікторія", "Головко Антоніна", "+380979689265"),
-            (5, "Горова Катерина", "Сетько Тетяна", "+380973122645"),
-            (6, "Коваленко Дмитро", "Сніжана Коваленко", "+380953050512"),
-            (7, "Коваленко Еліна", "Коваленко Анастасія", "+380992825447"),
-            (8, "Негода Софія", "Дар'я Негода", "+380673181265"),
-            (9, "Носач Орест", "Анна Носач", "+380639719067"),
-            (10, "Ображей Денис", "Марія Ображей", "+380636029707"),
-            (11, "Покотецький Дмитро", "Савчук Олександра", "+380507374130"),
-            (12, "Рябих Кьяра", "Рябих Тетяна", "+380992070428"),
-            (13, "Скидан Матвій", "Ганна Скидан", "+380978410845"),
-            (14, "Стародуб Кирило", "Стародуб Ірина", "+380678400930"),
-            (15, "Улізько Дмитро", "Оксана Улізько", "+380637663841"),
-            (16, "Чиж Анна", "Чиж Аліна", "+380635046004"),
-            (17, "Школяр Тимофій", "Школяр Анастасія", "+380991224316"),
-            (18, "Шовнадзе Арсен", "Шовнадзе Суліко", "+380671773179"),
+            ("Акобян Мане", "Лілія Маргарян", "+380671818081", "2026-01-01", 1),
+            ("Ахмедова Мілана", "Севіна Ахмедова", "+380972845351", "2026-01-01", 1),
+            ("Бурнаш Анастасія", "Ірина Лісняк", "+380504103930", "2026-01-01", 1),
+            ("Головко Вікторія", "Головко Антоніна", "+380979689265", "2026-01-01", 1),
+            ("Горова Катерина", "Сетько Тетяна", "+380973122645", "2026-01-01", 1),
+            ("Коваленко Дмитро", "Сніжана Коваленко", "+380953050512", "2026-01-01", 1),
+            ("Коваленко Еліна", "Коваленко Анастасія", "+380992825447", "2026-01-01", 1),
+            ("Негода Софія", "Дар'я Негода", "+380673181265", "2026-01-01", 1),
+            ("Носач Орест", "Анна Носач", "+380639719067", "2026-01-01", 1),
+            ("Ображей Денис", "Марія Ображей", "+380636029707", "2026-01-01", 1),
+            ("Покотецький Дмитро", "Савчук Олександра", "+380507374130", "2026-01-01", 1),
+            ("Рябих Кьяра", "Рябих Тетяна", "+380992070428", "2026-01-01", 1),
+            ("Скидан Матвій", "Ганна Скидан", "+380978410845", "2026-01-01", 1),
+            ("Стародуб Кирило", "Стародуб Ірина", "+380678400930", "2026-01-01", 1),
+            ("Улізько Дмитро", "Оксана Улізько", "+380637663841", "2026-01-01", 1),
+            ("Чиж Анна", "Чиж Аліна", "+380635046004", "2026-01-01", 1),
+            ("Школяр Тимофій", "Школяр Анастасія", "+380991224316", "2026-01-01", 1),
+            ("Шовнадзе Арсен", "Шовнадзе Суліко", "+380671773179", "2026-01-01", 1),
         ]
-        c.executemany("INSERT INTO students VALUES (?, ?, ?, ?)", students)
+        c.executemany(
+            "INSERT INTO students (full_name, parent_name, phone, date_added,"
+            " is_active) VALUES (?, ?, ?, ?, ?)",
+            students,
+        )
         conn.commit()
     conn.close()
 
@@ -139,6 +163,7 @@ HTML_TEMPLATE = """
         select, input, button.form-btn { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
         button.form-btn { background: #34c759; color: white; border: none; font-weight: bold; cursor: pointer; }
         button.danger-btn { background: #ff3b30; color: white; border: none; font-weight: bold; cursor: pointer; }
+        button.action-btn { padding: 4px 8px; border-radius: 4px; font-size: 11px; border: none; cursor: pointer; font-weight: bold; }
         .badge { padding: 3px 6px; border-radius: 4px; font-weight: bold; }
         .plus { background: #d4edda; color: #155724; }
         .minus { background: #f8d7da; color: #721c24; }
@@ -153,10 +178,12 @@ HTML_TEMPLATE = """
         <button class="active" onclick="switchTab('view-tab', this)">📋 Учні</button>
         <button onclick="switchTab('categories-tab', this)">📊 Категорії</button>
         <button onclick="switchTab('expenses-tab', this)">📉 Витрати</button>
+        <button id="student-detail-tab-btn" style="display:none;" onclick="switchTab('student-detail-tab', this)">👤 Деталізація</button>
+        <button id="contacts-tab-btn" style="display:none;" onclick="switchTab('contacts-tab', this)">👥 Контакти</button>
         <button id="admin-tab-btn" style="display:none;" onclick="switchTab('admin-tab', this)">⚙️ Адмінка</button>
     </div>
 
-    <!-- ВКЛАДКА 1: УЧНІ -->
+    <!-- ВКЛАДКА 1: УЧНІ (ДЛЯ БАТЬКІВ) -->
     <div id="view-tab" class="tab-content active">
         <div class="card">
             <label><b>Оберіть збір для аналізу:</b></label>
@@ -302,15 +329,14 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ВКЛАДКА 4: АДМІНІСТРУВАННЯ -->
-    <div id="admin-tab" class="tab-content">
-        <!-- БЛОК СТАТИСТИКИ ПО ОПРЕМУ УЧНЮ -->
+    <!-- ВКЛАДКА 4: ДЕТАЛІЗАЦІЯ ПО УЧНЮ (ДЛЯ АДМІНА) -->
+    <div id="student-detail-tab" class="tab-content">
         <div class="card" style="border: 2px solid #007aff;">
-            <h3>👤 Статистика по окремому учню</h3>
+            <h3>👤 Персональна статистика учня</h3>
             <label>Оберіть учня для перегляду:</label>
             <select id="admin-student-report-select" onchange="renderStudentReport()"></select>
 
-            <div style="overflow-x:auto; margin-top: 10px;">
+            <div style="overflow-x:auto; margin-top: 15px;">
                 <table>
                     <thead>
                         <tr>
@@ -332,7 +358,49 @@ HTML_TEMPLATE = """
                 </table>
             </div>
         </div>
+    </div>
 
+    <!-- ВКЛАДКА 5: КОНТАКТИ ТА КЕРУВАННЯ УЧНЯМИ (ДЛЯ АДМІНА) -->
+    <div id="contacts-tab" class="tab-content">
+        <div class="card" style="border: 1px solid #34c759;">
+            <h3 id="student-form-title">➕ Додати нового учня</h3>
+            <input type="hidden" id="edit-student-id" value="">
+            
+            <label>ПІБ Учня:</label>
+            <input type="text" id="stud-fullname" placeholder="напр. Іванов Іван">
+
+            <label>ПІБ Батьків / Представника:</label>
+            <input type="text" id="stud-parentname" placeholder="напр. Іванова Олена">
+
+            <label>Телефон:</label>
+            <input type="text" id="stud-phone" placeholder="+380XXXXXXXXX">
+
+            <label>Дата зарахування у клас:</label>
+            <input type="date" id="stud-date-added">
+
+            <button class="form-btn" id="save-student-btn" onclick="saveStudent()">Зберегти учня</button>
+            <button class="danger-btn" id="cancel-edit-btn" style="display:none;" onclick="resetStudentForm()">Скасувати редагування</button>
+        </div>
+
+        <div class="card" style="overflow-x:auto;">
+            <h3>👥 Реєстр учнів класу</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Учень</th>
+                        <th>Батьки / Телефон</th>
+                        <th>Дата вступу</th>
+                        <th>Статус</th>
+                        <th>Дії</th>
+                    </tr>
+                </thead>
+                <tbody id="contacts-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 6: АДМІНІСТРУВАННЯ -->
+    <div id="admin-tab" class="tab-content">
         <div class="card">
             <h3>➕ Створити новий збір</h3>
             <label>Тип збору:</label>
@@ -346,6 +414,9 @@ HTML_TEMPLATE = """
             
             <label>Потрібно з дитини (грн):</label>
             <input type="number" id="new-coll-target" placeholder="200">
+
+            <label>Дата оголошення збору:</label>
+            <input type="date" id="new-coll-date">
             
             <button class="form-btn" onclick="createCollection()">Додати збір</button>
         </div>
@@ -406,6 +477,8 @@ HTML_TEMPLATE = """
         let currentUserId = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0;
 
         document.getElementById('expense-date').valueAsDate = new Date();
+        document.getElementById('stud-date-added').valueAsDate = new Date();
+        document.getElementById('new-coll-date').valueAsDate = new Date();
 
         const today = new Date();
         const startOfYear = new Date(today.getFullYear(), 0, 1);
@@ -428,6 +501,8 @@ HTML_TEMPLATE = """
             
             if(globalData.is_admin) {
                 document.getElementById('admin-tab-btn').style.display = 'block';
+                document.getElementById('student-detail-tab-btn').style.display = 'block';
+                document.getElementById('contacts-tab-btn').style.display = 'block';
             }
 
             const pSelect = document.getElementById('parent-collection-filter');
@@ -467,13 +542,17 @@ HTML_TEMPLATE = """
 
                 const studSelect = document.getElementById('select-student');
                 studSelect.innerHTML = '';
-                globalData.students.forEach(s => {
+                globalData.all_students.filter(s => s.is_active === 1).forEach(s => {
                     studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
-                    studReportSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
+                });
+
+                globalData.all_students.forEach(s => {
+                    studReportSelect.innerHTML += `<option value="${s.id}">${s.full_name} ${s.is_active ? '' : '(вибув)'}</option>`;
                 });
 
                 updatePaymentInput();
                 renderStudentReport();
+                renderContactsView();
             }
 
             renderParentView();
@@ -481,12 +560,118 @@ HTML_TEMPLATE = """
             renderExpensesView();
         }
 
+        function renderContactsView() {
+            if(!globalData || !globalData.is_admin) return;
+            const tbody = document.getElementById('contacts-table-body');
+            tbody.innerHTML = '';
+
+            globalData.all_students.forEach(s => {
+                const statusBadge = s.is_active ? '<span class="badge plus">Активний</span>' : '<span class="badge minus">Вибув</span>';
+                const toggleBtnText = s.is_active ? 'Деактивувати' : 'Активувати';
+                const toggleBtnClass = s.is_active ? 'danger-btn' : 'form-btn';
+
+                tbody.innerHTML += `
+                    <tr>
+                        <td><b>${s.full_name}</b></td>
+                        <td>${s.parent_name || '-'}<br><small style="color:#666">${s.phone || '-'}</small></td>
+                        <td>${s.date_added}</td>
+                        <td>${statusBadge}</td>
+                        <td>
+                            <button class="action-btn" style="background:#007aff; color:white; margin-bottom:4px;" onclick="editStudent(${s.id})">✏️ Редагувати</button>
+                            <button class="action-btn ${toggleBtnClass}" onclick="toggleStudentActive(${s.id}, ${s.is_active})">${toggleBtnText}</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function editStudent(id) {
+            const student = globalData.all_students.find(s => s.id === id);
+            if(!student) return;
+
+            document.getElementById('edit-student-id').value = student.id;
+            document.getElementById('stud-fullname').value = student.full_name;
+            document.getElementById('stud-parentname').value = student.parent_name || '';
+            document.getElementById('stud-phone').value = student.phone || '';
+            document.getElementById('stud-date-added').value = student.date_added;
+
+            document.getElementById('student-form-title').innerText = '✏️ Редагувати дані учня';
+            document.getElementById('save-student-btn').innerText = 'Зберегти зміни';
+            document.getElementById('cancel-edit-btn').style.display = 'block';
+        }
+
+        function resetStudentForm() {
+            document.getElementById('edit-student-id').value = '';
+            document.getElementById('stud-fullname').value = '';
+            document.getElementById('stud-parentname').value = '';
+            document.getElementById('stud-phone').value = '';
+            document.getElementById('stud-date-added').valueAsDate = new Date();
+
+            document.getElementById('student-form-title').innerText = '➕ Додати нового учня';
+            document.getElementById('save-student-btn').innerText = 'Зберегти учня';
+            document.getElementById('cancel-edit-btn').style.display = 'none';
+        }
+
+        async function saveStudent() {
+            const id = document.getElementById('edit-student-id').value;
+            const full_name = document.getElementById('stud-fullname').value;
+            const parent_name = document.getElementById('stud-parentname').value;
+            const phone = document.getElementById('stud-phone').value;
+            const date_added = document.getElementById('stud-date-added').value;
+
+            if(!full_name) return alert('Вкажіть ПІБ учня!');
+
+            const res = await fetch('/api/save_student', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: currentUserId,
+                    id: id ? parseInt(id) : null,
+                    full_name,
+                    parent_name,
+                    phone,
+                    date_added
+                })
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Дані учня збережено!');
+            resetStudentForm();
+            loadData();
+        }
+
+        async function toggleStudentActive(student_id, current_status) {
+            const new_status = current_status ? 0 : 1;
+            const confirmMsg = current_status ? 
+                'Ви дійсно бажаєте перевести учня у статус "Вибув"? Його не буде видно в списках батьків, але історія збережеться.' : 
+                'Відновити активний статус учня?';
+
+            if(!confirm(confirmMsg)) return;
+
+            const res = await fetch('/api/toggle_student_active', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: currentUserId,
+                    student_id,
+                    is_active: new_status
+                })
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            loadData();
+        }
+
         function renderStudentReport() {
             if(!globalData || !globalData.is_admin) return;
             const sId = parseInt(document.getElementById('admin-student-report-select').value);
             if(!sId) return;
 
-            const student = globalData.students.find(s => s.id === sId);
+            const student = globalData.all_students.find(s => s.id === sId);
             if(!student) return;
 
             const tbody = document.getElementById('admin-student-report-body');
@@ -496,23 +681,24 @@ HTML_TEMPLATE = """
             let totPaid = 0;
 
             globalData.collections.forEach(c => {
-                const pay = student.payments[c.id] || { required: c.target_amount, paid: 0 };
-                const bal = pay.paid - pay.required;
-                
-                totReq += pay.required;
-                totPaid += pay.paid;
+                const pay = student.payments[c.id];
+                if(pay) {
+                    const bal = pay.paid - pay.required;
+                    totReq += pay.required;
+                    totPaid += pay.paid;
 
-                const balClass = bal >= 0 ? 'plus' : 'minus';
-                const typePrefix = c.is_class_fund ? '🏫' : '🎯';
+                    const balClass = bal >= 0 ? 'plus' : 'minus';
+                    const typePrefix = c.is_class_fund ? '🏫' : '🎯';
 
-                tbody.innerHTML += `
-                    <tr>
-                        <td><b>${typePrefix} ${c.name}</b></td>
-                        <td>${pay.required} грн</td>
-                        <td>${pay.paid} грн</td>
-                        <td><span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span></td>
-                    </tr>
-                `;
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><b>${typePrefix} ${c.name}</b></td>
+                            <td>${pay.required} грн</td>
+                            <td>${pay.paid} грн</td>
+                            <td><span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span></td>
+                        </tr>
+                    `;
+                }
             });
 
             const totBal = totPaid - totReq;
@@ -531,7 +717,7 @@ HTML_TEMPLATE = """
             
             if(!cId || !sId) return;
 
-            const student = globalData.students.find(s => s.id === sId);
+            const student = globalData.all_students.find(s => s.id === sId);
             const payData = (student && student.payments[cId]) ? student.payments[cId] : { paid: 0, receipt: null };
 
             document.getElementById('pay-amount').value = payData.paid;
@@ -581,8 +767,8 @@ HTML_TEMPLATE = """
                 if(!coll) return;
 
                 let totalCollected = 0;
-                const studentCount = globalData.students.length;
-                const totalTarget = (coll.target_amount || 0) * studentCount;
+                const activeStudentCount = globalData.students.length;
+                const totalTarget = (coll.target_amount || 0) * activeStudentCount;
 
                 globalData.students.forEach(s => {
                     const pay = s.payments[collId] || { required: coll.target_amount, paid: 0, receipt: null };
@@ -700,7 +886,7 @@ HTML_TEMPLATE = """
 
             document.getElementById('exp-total-amount').innerText = `${sumExp} грн`;
             
-            let totalCollectedAll = globalData.students.reduce((acc, s) => acc + s.total_paid, 0);
+            let totalCollectedAll = globalData.all_students.reduce((acc, s) => acc + s.total_paid, 0);
             let totalExpAll = globalData.expenses.reduce((acc, e) => acc + e.amount, 0);
             let netBal = totalCollectedAll - totalExpAll;
             
@@ -713,6 +899,8 @@ HTML_TEMPLATE = """
             const is_class_fund = document.getElementById('new-coll-type').value;
             const name = document.getElementById('new-coll-name').value;
             const target = document.getElementById('new-coll-target').value;
+            const created_at = document.getElementById('new-coll-date').value;
+
             if(!name) return alert('Вкажіть назву/призначення збору!');
             
             const res = await fetch('/api/add_collection', {
@@ -722,7 +910,8 @@ HTML_TEMPLATE = """
                     user_id: currentUserId,
                     name,
                     is_class_fund: parseInt(is_class_fund),
-                    target_amount: parseFloat(target || 0)
+                    target_amount: parseFloat(target || 0),
+                    created_at
                 })
             });
             const ans = await res.json();
@@ -849,23 +1038,33 @@ def get_budget():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    c.execute("SELECT id, name, is_class_fund, target_amount FROM collections")
+    c.execute(
+        "SELECT id, name, is_class_fund, target_amount, created_at FROM"
+        " collections"
+    )
     colls = [
         {
             "id": row[0],
             "name": row[1],
             "is_class_fund": row[2],
             "target_amount": row[3],
+            "created_at": row[4] or "2026-01-01",
         }
         for row in c.fetchall()
     ]
 
-    c.execute("SELECT id, full_name, parent_name FROM students")
-    students = c.fetchall()
+    # Усі учні для адміна
+    c.execute(
+        "SELECT id, full_name, parent_name, phone, date_added, is_active FROM"
+        " students"
+    )
+    all_students_raw = c.fetchall()
 
-    student_list = []
-    for s in students:
-        s_id, full_name, parent_name = s
+    all_student_list = []
+    active_student_list = []
+
+    for s in all_students_raw:
+        s_id, full_name, parent_name, phone, date_added, is_active = s
 
         c.execute(
             "SELECT collection_id, required, paid, receipt_filename FROM"
@@ -887,15 +1086,22 @@ def get_budget():
             total_paid += paid
             total_required += req
 
-        student_list.append({
+        student_obj = {
             "id": s_id,
             "full_name": full_name,
             "parent_name": parent_name,
+            "phone": phone,
+            "date_added": date_added or "2026-01-01",
+            "is_active": is_active if is_active is not None else 1,
             "payments": payments_dict,
             "total_paid": total_paid,
             "total_required": total_required,
             "balance": total_paid - total_required,
-        })
+        }
+
+        all_student_list.append(student_obj)
+        if student_obj["is_active"] == 1:
+            active_student_list.append(student_obj)
 
     if start_date and end_date:
         c.execute(
@@ -967,12 +1173,88 @@ def get_budget():
 
     conn.close()
     return jsonify({
-        "students": student_list,
+        "students": active_student_list,
+        "all_students": all_student_list if is_admin else active_student_list,
         "collections": colls,
         "expenses": expenses_list,
         "category_stats": category_stats,
         "is_admin": is_admin,
     })
+
+
+@app.route("/api/save_student", methods=["POST"])
+def save_student():
+    data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    s_id = data.get("id")
+    full_name = data.get("full_name")
+    parent_name = data.get("parent_name", "")
+    phone = data.get("phone", "")
+    date_added = data.get("date_added", datetime.now().strftime("%Y-%m-%d"))
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    if s_id:
+        # Редагування
+        c.execute(
+            "UPDATE students SET full_name=?, parent_name=?, phone=?,"
+            " date_added=? WHERE id=?",
+            (full_name, parent_name, phone, date_added, s_id),
+        )
+    else:
+        # Створення нового учня
+        c.execute(
+            "INSERT INTO students (full_name, parent_name, phone, date_added,"
+            " is_active) VALUES (?, ?, ?, ?, 1)",
+            (full_name, parent_name, phone, date_added),
+        )
+        new_student_id = c.lastrowid
+
+        # Автоматично додаємо нарахування ЛИШЕ за зборами, ініційованими ПІСЛЯ або В ДЕНЬ зарахування учня
+        c.execute(
+            "SELECT id, target_amount, created_at FROM collections WHERE"
+            " created_at >= ?",
+            (date_added,),
+        )
+        colls = c.fetchall()
+
+        for c_id, target, c_date in colls:
+            c.execute(
+                "INSERT INTO payments (student_id, collection_id, required,"
+                " paid) VALUES (?, ?, ?, 0)",
+                (new_student_id, c_id, target),
+            )
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/toggle_student_active", methods=["POST"])
+def toggle_student_active():
+    data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    s_id = data.get("student_id")
+    is_active = data.get("is_active", 1)
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE students SET is_active=? WHERE id=?",
+        (is_active, s_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/add_collection", methods=["POST"])
@@ -986,17 +1268,22 @@ def add_collection():
     name = data.get("name")
     is_fund = data.get("is_class_fund", 0)
     target = data.get("target_amount", 0)
+    created_at = data.get("created_at", datetime.now().strftime("%Y-%m-%d"))
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO collections (name, is_class_fund, target_amount) VALUES"
-        " (?, ?, ?)",
-        (name, is_fund, target),
+        "INSERT INTO collections (name, is_class_fund, target_amount,"
+        " created_at) VALUES (?, ?, ?, ?)",
+        (name, is_fund, target, created_at),
     )
     coll_id = c.lastrowid
 
-    c.execute("SELECT id FROM students")
+    # Збір нараховується ЛИШЕ АКТИВНИМ учням, доданим ДО або В ДЕНЬ створення збору
+    c.execute(
+        "SELECT id FROM students WHERE is_active=1 AND date_added <= ?",
+        (created_at,),
+    )
     students = c.fetchall()
     for s in students:
         c.execute(
