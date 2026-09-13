@@ -1,7 +1,8 @@
 import os
-import sqlite3
 import asyncio
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, render_template_string, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -10,10 +11,18 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
-# 🔴 Список Telegram ID адміністраторів (Артем та другий адмін)
-ADMIN_IDS = [114251065]
+# 🔴 Рядок підключення до PostgreSQL (зчитується з Environment Variable на Render)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-DB_FILE = "class_budget.db"
+# Прибираємо параметр channel_binding, якщо він є у рядку
+if "channel_binding=" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.split("&channel_binding=")[0]
+
+# 🔴 Список Telegram ID адміністраторів (Артем та другий адмін)
+ADMIN_IDS = [945268466, 114251065]
+
 UPLOAD_FOLDER = 'receipts'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
 
@@ -23,70 +32,62 @@ if not os.path.exists(UPLOAD_FOLDER):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def get_db_connection():
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL не вказано в Environment Variables!")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return conn
+
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    if not DATABASE_URL:
+        print("DATABASE_URL відсутня. Пропуск ініціалізації БД.")
+        return
+
+    conn = get_db_connection()
     c = conn.cursor()
+
     c.execute('''CREATE TABLE IF NOT EXISTS students (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     full_name TEXT NOT NULL,
                     parent_name TEXT,
                     phone TEXT,
                     date_added TEXT NOT NULL,
-                    is_active INTEGER DEFAULT 1
+                    is_active INT DEFAULT 1
                 )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS collections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
-                    is_class_fund INTEGER DEFAULT 0,
-                    is_optional INTEGER DEFAULT 0,
-                    is_selective INTEGER DEFAULT 0,
-                    target_amount REAL DEFAULT 0,
+                    is_class_fund INT DEFAULT 0,
+                    is_optional INT DEFAULT 0,
+                    is_selective INT DEFAULT 0,
+                    target_amount NUMERIC DEFAULT 0,
                     created_at TEXT NOT NULL
                 )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS payments (
-                    student_id INTEGER,
-                    collection_id INTEGER,
-                    required REAL DEFAULT 0,
-                    paid REAL DEFAULT 0,
+                    student_id INT,
+                    collection_id INT,
+                    required NUMERIC DEFAULT 0,
+                    paid NUMERIC DEFAULT 0,
                     receipt_filename TEXT,
                     PRIMARY KEY (student_id, collection_id)
                 )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS expenses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    collection_id INTEGER NOT NULL,
+                    id SERIAL PRIMARY KEY,
+                    collection_id INT NOT NULL,
                     purpose TEXT NOT NULL,
-                    amount REAL NOT NULL,
+                    amount NUMERIC NOT NULL,
                     date_str TEXT NOT NULL,
                     receipt_filename TEXT
                 )''')
 
-    try:
-        c.execute("ALTER TABLE students ADD COLUMN date_added TEXT DEFAULT '2026-01-01'")
-    except sqlite3.OperationalError:
-        pass
+    conn.commit()
 
-    try:
-        c.execute("ALTER TABLE students ADD COLUMN is_active INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        c.execute("ALTER TABLE collections ADD COLUMN created_at TEXT DEFAULT '2026-01-01'")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        c.execute("ALTER TABLE collections ADD COLUMN is_optional INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        c.execute("ALTER TABLE collections ADD COLUMN is_selective INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-
-    c.execute("SELECT COUNT(*) FROM students")
-    if c.fetchone()[0] == 0:
+    c.execute("SELECT COUNT(*) as count FROM students")
+    count_res = c.fetchone()
+    if count_res['count'] == 0:
         students = [
             ('Акобян Мане', 'Лілія Маргарян', '+380671818081', '2026-01-01', 1),
             ('Ахмедова Мілана', 'Севіна Ахмедова', '+380972845351', '2026-01-01', 1),
@@ -107,11 +108,16 @@ def init_db():
             ('Школяр Тимофій', 'Школяр Анастасія', '+380991224316', '2026-01-01', 1),
             ('Шовнадзе Арсен', 'Шовнадзе Суліко', '+380671773179', '2026-01-01', 1)
         ]
-        c.executemany("INSERT INTO students (full_name, parent_name, phone, date_added, is_active) VALUES (?, ?, ?, ?, ?)", students)
+        c.executemany("INSERT INTO students (full_name, parent_name, phone, date_added, is_active) VALUES (%s, %s, %s, %s, %s)", students)
         conn.commit()
+
+    c.close()
     conn.close()
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"Помилка при ініціалізації БД: {e}")
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -1098,7 +1104,7 @@ HTML_TEMPLATE = """
 
             let sumExp = 0;
             filteredExpenses.forEach(e => {
-                sumExp += e.amount;
+                sumExp += parseFloat(e.amount);
                 let rHtml = e.receipt ? `<a class="receipt-link" href="/uploads/${e.receipt}" target="_blank">🧾 Чек</a>` : '-';
                 
                 let actionsHtml = '';
@@ -1126,7 +1132,7 @@ HTML_TEMPLATE = """
             document.getElementById('exp-total-amount').innerText = `${sumExp} грн`;
             
             let totalCollectedAll = globalData.all_students.reduce((acc, s) => acc + s.total_paid, 0);
-            let totalExpAll = globalData.expenses.reduce((acc, e) => acc + e.amount, 0);
+            let totalExpAll = globalData.expenses.reduce((acc, e) => acc + parseFloat(e.amount), 0);
             let netBal = totalCollectedAll - totalExpAll;
             
             const netElem = document.getElementById('exp-net-balance');
@@ -1347,48 +1353,50 @@ def get_budget():
 
     is_admin = user_id in ADMIN_IDS
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
-    c.execute("SELECT id, name, is_class_fund, is_optional, is_selective, target_amount, created_at FROM collections")
+    c.execute("SELECT id, name, is_class_fund, is_optional, is_selective, target_amount, created_at FROM collections ORDER BY id ASC")
     colls = [{
-        'id': row[0],
-        'name': row[1],
-        'is_class_fund': row[2],
-        'is_optional': row[3] or 0,
-        'is_selective': row[4] or 0,
-        'target_amount': row[5],
-        'created_at': row[6] or '2026-01-01'
+        'id': row['id'],
+        'name': row['name'],
+        'is_class_fund': row['is_class_fund'],
+        'is_optional': row['is_optional'] or 0,
+        'is_selective': row['is_selective'] or 0,
+        'target_amount': float(row['target_amount'] or 0),
+        'created_at': row['created_at'] or '2026-01-01'
     } for row in c.fetchall()]
 
-    c.execute("SELECT id, full_name, parent_name, phone, date_added, is_active FROM students")
+    c.execute("SELECT id, full_name, parent_name, phone, date_added, is_active FROM students ORDER BY full_name ASC")
     all_students_raw = c.fetchall()
 
     all_student_list = []
     active_student_list = []
 
     for s in all_students_raw:
-        s_id, full_name, parent_name, phone, date_added, is_active = s
-
-        c.execute("SELECT collection_id, required, paid, receipt_filename FROM payments WHERE student_id=?", (s_id,))
+        s_id = s['id']
+        c.execute("SELECT collection_id, required, paid, receipt_filename FROM payments WHERE student_id=%s", (s_id,))
         p_rows = c.fetchall()
         payments_dict = {}
         total_paid = 0
         total_required = 0
 
         for pr in p_rows:
-            c_id, req, paid, receipt = pr
+            c_id = pr['collection_id']
+            req = float(pr['required'] or 0)
+            paid = float(pr['paid'] or 0)
+            receipt = pr['receipt_filename']
             payments_dict[c_id] = {'required': req, 'paid': paid, 'receipt': receipt}
             total_paid += paid
             total_required += req
 
         student_obj = {
             'id': s_id,
-            'full_name': full_name,
-            'parent_name': parent_name,
-            'phone': phone,
-            'date_added': date_added or '2026-01-01',
-            'is_active': is_active if is_active is not None else 1,
+            'full_name': s['full_name'],
+            'parent_name': s['parent_name'],
+            'phone': s['phone'],
+            'date_added': s['date_added'] or '2026-01-01',
+            'is_active': s['is_active'] if s['is_active'] is not None else 1,
             'payments': payments_dict,
             'total_paid': total_paid,
             'total_required': total_required,
@@ -1400,18 +1408,18 @@ def get_budget():
             active_student_list.append(student_obj)
 
     if start_date and end_date:
-        c.execute("SELECT e.id, e.collection_id, c.name, e.purpose, e.amount, e.date_str, e.receipt_filename FROM expenses e JOIN collections c ON e.collection_id = c.id WHERE e.date_str >= ? AND e.date_str <= ? ORDER BY e.id DESC", (start_date, end_date))
+        c.execute("SELECT e.id, e.collection_id, c.name as collection_name, e.purpose, e.amount, e.date_str, e.receipt_filename FROM expenses e JOIN collections c ON e.collection_id = c.id WHERE e.date_str >= %s AND e.date_str <= %s ORDER BY e.id DESC", (start_date, end_date))
     else:
-        c.execute("SELECT e.id, e.collection_id, c.name, e.purpose, e.amount, e.date_str, e.receipt_filename FROM expenses e JOIN collections c ON e.collection_id = c.id ORDER BY e.id DESC")
+        c.execute("SELECT e.id, e.collection_id, c.name as collection_name, e.purpose, e.amount, e.date_str, e.receipt_filename FROM expenses e JOIN collections c ON e.collection_id = c.id ORDER BY e.id DESC")
 
     expenses_list = [{
-        'id': row[0],
-        'collection_id': row[1],
-        'collection_name': row[2],
-        'purpose': row[3],
-        'amount': row[4],
-        'date_str': row[5],
-        'receipt': row[6]
+        'id': row['id'],
+        'collection_id': row['collection_id'],
+        'collection_name': row['collection_name'],
+        'purpose': row['purpose'],
+        'amount': float(row['amount']),
+        'date_str': row['date_str'],
+        'receipt': row['receipt_filename']
     } for row in c.fetchall()]
 
     category_stats = {
@@ -1424,22 +1432,26 @@ def get_budget():
         is_fund = coll['is_class_fund']
         cat_key = 'fund' if is_fund == 1 else 'other'
 
-        c.execute("SELECT SUM(required) FROM payments WHERE collection_id=?", (c_id,))
-        category_stats[cat_key]['target'] += c.fetchone()[0] or 0
+        c.execute("SELECT SUM(required) as tot FROM payments WHERE collection_id=%s", (c_id,))
+        res_req = c.fetchone()
+        category_stats[cat_key]['target'] += float(res_req['tot'] or 0)
 
-        c.execute("SELECT SUM(paid) FROM payments WHERE collection_id=?", (c_id,))
-        category_stats[cat_key]['paid'] += c.fetchone()[0] or 0
+        c.execute("SELECT SUM(paid) as tot FROM payments WHERE collection_id=%s", (c_id,))
+        res_paid = c.fetchone()
+        category_stats[cat_key]['paid'] += float(res_paid['tot'] or 0)
 
         if start_date and end_date:
-            c.execute("SELECT SUM(amount) FROM expenses WHERE collection_id=? AND date_str >= ? AND date_str <= ?", (c_id, start_date, end_date))
+            c.execute("SELECT SUM(amount) as tot FROM expenses WHERE collection_id=%s AND date_str >= %s AND date_str <= %s", (c_id, start_date, end_date))
         else:
-            c.execute("SELECT SUM(amount) FROM expenses WHERE collection_id=?", (c_id,))
+            c.execute("SELECT SUM(amount) as tot FROM expenses WHERE collection_id=%s", (c_id,))
 
-        category_stats[cat_key]['exp'] += c.fetchone()[0] or 0
+        res_exp = c.fetchone()
+        category_stats[cat_key]['exp'] += float(res_exp['tot'] or 0)
 
     category_stats['fund']['balance'] = category_stats['fund']['paid'] - category_stats['fund']['exp']
     category_stats['other']['balance'] = category_stats['other']['paid'] - category_stats['other']['exp']
 
+    c.close()
     conn.close()
     return jsonify({
         'students': active_student_list,
@@ -1453,7 +1465,6 @@ def get_budget():
 @app.route('/api/add_expense', methods=['POST'])
 def add_expense():
     user_id = int(request.form.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
@@ -1472,21 +1483,22 @@ def add_expense():
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
     if exp_id:
         if filename:
-            c.execute("UPDATE expenses SET collection_id=?, purpose=?, amount=?, date_str=?, receipt_filename=? WHERE id=?", 
+            c.execute("UPDATE expenses SET collection_id=%s, purpose=%s, amount=%s, date_str=%s, receipt_filename=%s WHERE id=%s", 
                       (c_id, purpose, amount, date_str, filename, exp_id))
         else:
-            c.execute("UPDATE expenses SET collection_id=?, purpose=?, amount=?, date_str=? WHERE id=?", 
+            c.execute("UPDATE expenses SET collection_id=%s, purpose=%s, amount=%s, date_str=%s WHERE id=%s", 
                       (c_id, purpose, amount, date_str, exp_id))
     else:
-        c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str, receipt_filename) VALUES (?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str, receipt_filename) VALUES (%s, %s, %s, %s, %s)",
                   (c_id, purpose, amount, date_str, filename))
 
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
@@ -1494,16 +1506,16 @@ def add_expense():
 def delete_expense():
     data = request.json
     user_id = int(data.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     exp_id = data.get('expense_id')
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM expenses WHERE id=?", (exp_id,))
+    c.execute("DELETE FROM expenses WHERE id=%s", (exp_id,))
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
@@ -1511,7 +1523,6 @@ def delete_expense():
 def transfer_to_fund():
     data = request.json
     user_id = int(data.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
@@ -1519,34 +1530,36 @@ def transfer_to_fund():
     amount = float(data.get('amount', 0))
     date_str = datetime.now().strftime("%Y-%m-%d")
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
-    c.execute("SELECT name, is_class_fund FROM collections WHERE id=?", (c_id,))
+    c.execute("SELECT name, is_class_fund FROM collections WHERE id=%s", (c_id,))
     coll_info = c.fetchone()
 
-    if not coll_info or coll_info[1] == 1:
+    if not coll_info or coll_info['is_class_fund'] == 1:
+        c.close()
         conn.close()
-        return jsonify({'error': 'Перенесення за raw_zalyzhok можливе лише для зборів категорії "Інші збори"!'})
+        return jsonify({'error': 'Перенесення залишку можливе лише для зборів категорії "Інші збори"!'})
 
-    coll_name = coll_info[0]
+    coll_name = coll_info['name']
 
     c.execute("SELECT id FROM collections WHERE is_class_fund=1 ORDER BY id ASC LIMIT 1")
     fund_row = c.fetchone()
 
     if not fund_row:
-        c.execute("INSERT INTO collections (name, is_class_fund, target_amount, created_at) VALUES ('Фонд класу', 1, 0, ?)", (date_str,))
-        fund_id = c.lastrowid
+        c.execute("INSERT INTO collections (name, is_class_fund, target_amount, created_at) VALUES ('Фонд класу', 1, 0, %s) RETURNING id", (date_str,))
+        fund_id = c.fetchone()['id']
     else:
-        fund_id = fund_row[0]
+        fund_id = fund_row['id']
 
-    c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str) VALUES (?, ?, ?, ?)",
+    c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str) VALUES (%s, %s, %s, %s)",
               (c_id, 'Перенесено до фонду класу', amount, date_str))
 
-    c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str) VALUES (?, ?, ?, ?)",
+    c.execute("INSERT INTO expenses (collection_id, purpose, amount, date_str) VALUES (%s, %s, %s, %s)",
               (fund_id, f"Поповнення з залишка збору: {coll_name}", -amount, date_str))
 
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
@@ -1554,7 +1567,6 @@ def transfer_to_fund():
 def save_student():
     data = request.json
     user_id = int(data.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
@@ -1564,25 +1576,26 @@ def save_student():
     phone = data.get('phone', '')
     date_added = data.get('date_added', datetime.now().strftime("%Y-%m-%d"))
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
     if s_id:
-        c.execute("UPDATE students SET full_name=?, parent_name=?, phone=?, date_added=? WHERE id=?",
+        c.execute("UPDATE students SET full_name=%s, parent_name=%s, phone=%s, date_added=%s WHERE id=%s",
                   (full_name, parent_name, phone, date_added, s_id))
     else:
-        c.execute("INSERT INTO students (full_name, parent_name, phone, date_added, is_active) VALUES (?, ?, ?, ?, 1)",
+        c.execute("INSERT INTO students (full_name, parent_name, phone, date_added, is_active) VALUES (%s, %s, %s, %s, 1) RETURNING id",
                   (full_name, parent_name, phone, date_added))
-        new_student_id = c.lastrowid
+        new_student_id = c.fetchone()['id']
 
-        c.execute("SELECT id, target_amount, created_at FROM collections WHERE created_at >= ? AND is_selective=0", (date_added,))
+        c.execute("SELECT id, target_amount, created_at FROM collections WHERE created_at >= %s AND is_selective=0", (date_added,))
         colls = c.fetchall()
 
-        for c_id, target, c_date in colls:
-            c.execute("INSERT INTO payments (student_id, collection_id, required, paid) VALUES (?, ?, ?, 0)",
-                      (new_student_id, c_id, target))
+        for col in colls:
+            c.execute("INSERT INTO payments (student_id, collection_id, required, paid) VALUES (%s, %s, %s, 0)",
+                      (new_student_id, col['id'], col['target_amount']))
 
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
@@ -1590,17 +1603,17 @@ def save_student():
 def toggle_student_active():
     data = request.json
     user_id = int(data.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     s_id = data.get('student_id')
     is_active = data.get('is_active', 1)
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("UPDATE students SET is_active=? WHERE id=?", (is_active, s_id))
+    c.execute("UPDATE students SET is_active=%s WHERE id=%s", (is_active, s_id))
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
@@ -1608,7 +1621,6 @@ def toggle_student_active():
 def add_collection():
     data = request.json
     user_id = int(data.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
@@ -1620,31 +1632,31 @@ def add_collection():
     created_at = data.get('created_at', datetime.now().strftime("%Y-%m-%d"))
     selected_students = data.get('selected_students', [])
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO collections (name, is_class_fund, is_optional, is_selective, target_amount, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO collections (name, is_class_fund, is_optional, is_selective, target_amount, created_at) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
               (name, is_fund, is_optional, is_selective, target, created_at))
-    coll_id = c.lastrowid
+    coll_id = c.fetchone()['id']
 
     if is_selective:
         for s_id in selected_students:
-            c.execute("INSERT INTO payments (student_id, collection_id, required, paid) VALUES (?, ?, ?, 0)",
+            c.execute("INSERT INTO payments (student_id, collection_id, required, paid) VALUES (%s, %s, %s, 0)",
                       (s_id, coll_id, target))
     else:
-        c.execute("SELECT id FROM students WHERE is_active=1 AND date_added <= ?", (created_at,))
+        c.execute("SELECT id FROM students WHERE is_active=1 AND date_added <= %s", (created_at,))
         students = c.fetchall()
         for s in students:
-            c.execute("INSERT INTO payments (student_id, collection_id, required, paid) VALUES (?, ?, ?, 0)",
-                      (s[0], coll_id, target))
+            c.execute("INSERT INTO payments (student_id, collection_id, required, paid) VALUES (%s, %s, %s, 0)",
+                      (s['id'], coll_id, target))
 
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
 @app.route('/api/save_payment', methods=['POST'])
 def save_payment():
     user_id = int(request.form.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
@@ -1660,17 +1672,24 @@ def save_payment():
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
 
     if filename:
-        c.execute("INSERT INTO payments (student_id, collection_id, paid, receipt_filename) VALUES (?, ?, ?, ?) ON CONFLICT(student_id, collection_id) DO UPDATE SET paid=EXCLUDED.paid, receipt_filename=EXCLUDED.receipt_filename",
+        c.execute("""INSERT INTO payments (student_id, collection_id, paid, receipt_filename) 
+                     VALUES (%s, %s, %s, %s) 
+                     ON CONFLICT (student_id, collection_id) 
+                     DO UPDATE SET paid=EXCLUDED.paid, receipt_filename=EXCLUDED.receipt_filename""",
                   (s_id, c_id, paid, filename))
     else:
-        c.execute("INSERT INTO payments (student_id, collection_id, paid) VALUES (?, ?, ?) ON CONFLICT(student_id, collection_id) DO UPDATE SET paid=EXCLUDED.paid",
+        c.execute("""INSERT INTO payments (student_id, collection_id, paid) 
+                     VALUES (%s, %s, %s) 
+                     ON CONFLICT (student_id, collection_id) 
+                     DO UPDATE SET paid=EXCLUDED.paid""",
                   (s_id, c_id, paid))
 
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
@@ -1678,18 +1697,18 @@ def save_payment():
 def delete_collection():
     data = request.json
     user_id = int(data.get('user_id', 0))
-
     if user_id not in ADMIN_IDS:
         return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
 
     c_id = data.get('collection_id')
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM collections WHERE id=?", (c_id,))
-    c.execute("DELETE FROM payments WHERE collection_id=?", (c_id,))
-    c.execute("DELETE FROM expenses WHERE collection_id=?", (c_id,))
+    c.execute("DELETE FROM collections WHERE id=%s", (c_id,))
+    c.execute("DELETE FROM payments WHERE collection_id=%s", (c_id,))
+    c.execute("DELETE FROM expenses WHERE collection_id=%s", (c_id,))
     conn.commit()
+    c.close()
     conn.close()
     return jsonify({'status': 'ok'})
 
