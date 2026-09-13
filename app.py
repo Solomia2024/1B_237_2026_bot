@@ -52,6 +52,8 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
                     is_class_fund INTEGER DEFAULT 0,
+                    is_optional INTEGER DEFAULT 0,
+                    is_selective INTEGER DEFAULT 0,
                     target_amount REAL DEFAULT 0,
                     created_at TEXT NOT NULL
                 )"""
@@ -94,6 +96,20 @@ def init_db():
         c.execute(
             "ALTER TABLE collections ADD COLUMN created_at TEXT DEFAULT"
             " '2026-01-01'"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute(
+            "ALTER TABLE collections ADD COLUMN is_optional INTEGER DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute(
+            "ALTER TABLE collections ADD COLUMN is_selective INTEGER DEFAULT 0"
         )
     except sqlite3.OperationalError:
         pass
@@ -166,10 +182,15 @@ HTML_TEMPLATE = """
         .badge { padding: 3px 6px; border-radius: 4px; font-weight: bold; }
         .plus { background: #d4edda; color: #155724; }
         .minus { background: #f8d7da; color: #721c24; }
+        .opt-badge { background: #fff3cd; color: #856404; }
+        .neutral-badge { background: #e2e3e5; color: #383d41; }
         .info-text { font-size: 12px; color: #007aff; margin-top: -6px; margin-bottom: 10px; font-weight: 500; }
         .receipt-link { font-size: 12px; color: #007aff; text-decoration: underline; font-weight: bold; display: block; margin-top: 4px; }
         .cat-title { font-size: 15px; font-weight: bold; margin-bottom: 8px; border-bottom: 2px solid #007aff; padding-bottom: 4px; color: #333; }
         .date-range-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .student-checkbox-list { max-height: 180px; overflow-y: auto; border: 1px solid #ccc; padding: 8px; border-radius: 6px; margin-bottom: 12px; background: #fafafa; }
+        .student-checkbox-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; cursor: pointer; }
+        .student-checkbox-item input { width: auto; margin: 0; }
     </style>
 </head>
 <body>
@@ -404,16 +425,29 @@ HTML_TEMPLATE = """
         <div class="card">
             <h3>➕ Створити новий збір</h3>
             <label>Тип збору:</label>
-            <select id="new-coll-type">
-                <option value="0">🎯 Інший цільовий збір (екскурсія, театр тощо)</option>
+            <select id="new-coll-type" onchange="toggleTargetInput()">
+                <option value="0">🎯 Інший цільовий збір (всі учні класу)</option>
                 <option value="1">🏫 Фонд класу</option>
+                <option value="2">💛 За бажанням / Хто скільки зможе</option>
+                <option value="3">👥 Збір для окремих учнів (підгрупа)</option>
             </select>
 
             <label>Назва / призначення збору:</label>
-            <input type="text" id="new-coll-name" placeholder="напр. Екскурсія в музей">
+            <input type="text" id="new-coll-name" placeholder="напр. Поїздка групи або Театр">
             
-            <label>Потрібно з дитини (грн):</label>
-            <input type="number" id="new-coll-target" placeholder="200">
+            <div id="target-amount-box">
+                <label>Потрібно з дитини (грн):</label>
+                <input type="number" id="new-coll-target" placeholder="200">
+            </div>
+
+            <div id="student-selection-box" style="display:none; margin-top:10px;">
+                <label><b>Оберіть учнів, які беруть участь у зборі:</b></label>
+                <div style="margin-bottom:6px;">
+                    <button type="button" class="action-btn" style="background:#007aff; color:white;" onclick="selectAllStudentsForColl(true)">Обрати всіх</button>
+                    <button type="button" class="action-btn" style="background:#6c757d; color:white;" onclick="selectAllStudentsForColl(false)">Зняти всіх</button>
+                </div>
+                <div class="student-checkbox-list" id="coll-students-checkboxes"></div>
+            </div>
 
             <label>Дата оголошення збору:</label>
             <input type="date" id="new-coll-date">
@@ -448,7 +482,7 @@ HTML_TEMPLATE = """
             <select id="expense-collection-select"></select>
 
             <label>Мета витрати (на що витрачено):</label>
-            <input type="text" id="expense-purpose" placeholder="напр. Закупівля зошитів або Квитки">
+            <input type="text" id="expense-purpose" placeholder="напр. Закупівля зошитів або Подарки">
 
             <label>Сума витрати (грн):</label>
             <input type="number" id="expense-amount" placeholder="450">
@@ -507,6 +541,43 @@ HTML_TEMPLATE = """
             btn.classList.add('active');
         }
 
+        function toggleTargetInput() {
+            const typeVal = document.getElementById('new-coll-type').value;
+            const targetBox = document.getElementById('target-amount-box');
+            const studentSelectionBox = document.getElementById('student-selection-box');
+
+            if(typeVal === '2') { // За бажанням
+                targetBox.style.display = 'none';
+                studentSelectionBox.style.display = 'none';
+                document.getElementById('new-coll-target').value = '0';
+            } else if(typeVal === '3') { // Окремі учні
+                targetBox.style.display = 'block';
+                studentSelectionBox.style.display = 'block';
+                renderStudentCheckboxes();
+            } else {
+                targetBox.style.display = 'block';
+                studentSelectionBox.style.display = 'none';
+            }
+        }
+
+        function renderStudentCheckboxes() {
+            if(!globalData) return;
+            const container = document.getElementById('coll-students-checkboxes');
+            container.innerHTML = '';
+            globalData.all_students.filter(s => s.is_active === 1).forEach(s => {
+                container.innerHTML += `
+                    <label class="student-checkbox-item">
+                        <input type="checkbox" class="coll-student-cb" value="${s.id}" checked>
+                        ${s.full_name}
+                    </label>
+                `;
+            });
+        }
+
+        function selectAllStudentsForColl(status) {
+            document.querySelectorAll('.coll-student-cb').forEach(cb => cb.checked = status);
+        }
+
         async function loadData() {
             const startD = document.getElementById('cat-start-date').value;
             const endD = document.getElementById('cat-end-date').value;
@@ -522,13 +593,16 @@ HTML_TEMPLATE = """
             }
 
             const pSelect = document.getElementById('parent-collection-filter');
-            pSelect.innerHTML = '<option value="all">🌐 Зведений звіт (Всі збори)</option>';
+            pSelect.innerHTML = '<option value="all">🌐 Зведений звіт (Всі загальні збори)</option>';
+            pSelect.innerHTML += '<option value="optional_all">💛 Всі збори за бажанням</option>';
             
             const expFilter = document.getElementById('expense-collection-filter');
             expFilter.innerHTML = '<option value="all">🌐 Всі витрати</option>';
 
             globalData.collections.forEach(c => {
-                const typePrefix = c.is_class_fund ? '🏫' : '📁';
+                let typePrefix = c.is_class_fund ? '🏫' : '📁';
+                if(c.is_optional) typePrefix = '💛';
+                if(c.is_selective) typePrefix = '👥';
                 pSelect.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
                 expFilter.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
             });
@@ -546,7 +620,7 @@ HTML_TEMPLATE = """
                 studReportSelect.innerHTML = '';
                 transferSelect.innerHTML = '';
 
-                const otherCollections = globalData.collections.filter(c => c.is_class_fund === 0);
+                const otherCollections = globalData.collections.filter(c => c.is_class_fund === 0 && !c.is_optional);
 
                 if(globalData.collections.length === 0) {
                     collSelect.innerHTML = '<option value="">Немає активних зборів</option>';
@@ -554,7 +628,9 @@ HTML_TEMPLATE = """
                     delSelect.innerHTML = '<option value="">Немає активних зборів</option>';
                 } else {
                     globalData.collections.forEach(c => {
-                        collSelect.innerHTML += `<option value="${c.id}">${c.name} (${c.target_amount} грн/учень)</option>`;
+                        let optText = c.is_optional ? 'за бажанням' : `${c.target_amount} грн/учень`;
+                        if(c.is_selective) optText = `${c.target_amount} грн/учень (підгрупа)`;
+                        collSelect.innerHTML += `<option value="${c.id}">${c.name} (${optText})</option>`;
                         expCollSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                         delSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                     });
@@ -778,20 +854,37 @@ HTML_TEMPLATE = """
 
             globalData.collections.forEach(c => {
                 const pay = student.payments[c.id];
+                const isOpt = c.is_optional === 1;
+
                 if(pay) {
                     const bal = pay.paid - pay.required;
-                    totReq += pay.required;
+                    if(!isOpt) { totReq += pay.required; }
                     totPaid += pay.paid;
 
-                    const balClass = bal >= 0 ? 'plus' : 'minus';
-                    const typePrefix = c.is_class_fund ? '🏫' : '🎯';
+                    let balBadge = `<span class="badge ${bal >= 0 ? 'plus' : 'minus'}">${bal >= 0 ? '+' : ''}${bal} грн</span>`;
+                    if(isOpt) {
+                        balBadge = `<span class="badge opt-badge">Внесок ${pay.paid} грн</span>`;
+                    }
+
+                    let typePrefix = c.is_class_fund ? '🏫' : '🎯';
+                    if(isOpt) typePrefix = '💛';
+                    if(c.is_selective) typePrefix = '👥';
 
                     tbody.innerHTML += `
                         <tr>
                             <td><b>${typePrefix} ${c.name}</b></td>
-                            <td>${pay.required} грн</td>
+                            <td>${isOpt ? 'Добровільно' : pay.required + ' грн'}</td>
                             <td>${pay.paid} грн</td>
-                            <td><span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span></td>
+                            <td>${balBadge}</td>
+                        </tr>
+                    `;
+                } else if(c.is_selective) {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><b>👥 ${c.name}</b></td>
+                            <td>-</td>
+                            <td>0 грн</td>
+                            <td><span class="badge neutral-badge">Не бере участь</span></td>
                         </tr>
                     `;
                 }
@@ -829,24 +922,37 @@ HTML_TEMPLATE = """
 
         function renderParentView() {
             if(!globalData) return;
-            const selectedId = document.getElementById('parent-collection-filter').value;
+            const selectedVal = document.getElementById('parent-collection-filter').value;
             const tbody = document.getElementById('parent-table-body');
             tbody.innerHTML = '';
 
-            if (selectedId === 'all') {
+            if (selectedVal === 'all') {
                 let totalCollectedAll = 0;
                 let totalTargetAll = 0;
 
                 globalData.students.forEach(s => {
-                    totalCollectedAll += s.total_paid;
-                    totalTargetAll += s.total_required;
-                    const balClass = s.balance >= 0 ? 'plus' : 'minus';
+                    let sPaidMandatory = 0;
+                    let sReqMandatory = 0;
+
+                    globalData.collections.filter(c => c.is_optional === 0).forEach(c => {
+                        const p = s.payments[c.id];
+                        if(p) {
+                            sPaidMandatory += p.paid;
+                            sReqMandatory += p.required;
+                        }
+                    });
+
+                    totalCollectedAll += sPaidMandatory;
+                    totalTargetAll += sReqMandatory;
+
+                    const bal = sPaidMandatory - sReqMandatory;
+                    const balClass = bal >= 0 ? 'plus' : 'minus';
                     tbody.innerHTML += `
                         <tr>
                             <td>${s.id}</td>
                             <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
-                            <td>${s.total_paid} грн</td>
-                            <td><span class="badge ${balClass}">${s.balance >= 0 ? '+' : ''}${s.balance} грн</span></td>
+                            <td>${sPaidMandatory} грн</td>
+                            <td><span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span></td>
                         </tr>
                     `;
                 });
@@ -857,42 +963,101 @@ HTML_TEMPLATE = """
                 const progress = totalTargetAll > 0 ? Math.round((totalCollectedAll / totalTargetAll) * 100) : 100;
                 document.getElementById('stat-progress').innerText = `${progress}%`;
 
+            } else if (selectedVal === 'optional_all') {
+                let totalOptCollected = 0;
+
+                globalData.students.forEach(s => {
+                    let sPaidOpt = 0;
+
+                    globalData.collections.filter(c => c.is_optional === 1).forEach(c => {
+                        const p = s.payments[c.id] || { paid: 0 };
+                        sPaidOpt += p.paid;
+                    });
+
+                    totalOptCollected += sPaidOpt;
+
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${s.id}</td>
+                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                            <td>${sPaidOpt} грн</td>
+                            <td><span class="badge opt-badge">Внесок за бажанням</span></td>
+                        </tr>
+                    `;
+                });
+
+                document.getElementById('stat-target').innerText = 'За бажанням';
+                document.getElementById('stat-total-collected').innerText = `${totalOptCollected} грн`;
+                document.getElementById('stat-total-target').innerText = 'Без ліміту';
+                document.getElementById('stat-progress').innerText = `100%`;
+
             } else {
-                const collId = parseInt(selectedId);
+                const collId = parseInt(selectedVal);
                 const coll = globalData.collections.find(c => c.id === collId);
                 if(!coll) return;
 
+                const isOpt = coll.is_optional === 1;
+                const isSel = coll.is_selective === 1;
                 let totalCollected = 0;
-                const activeStudentCount = globalData.students.length;
-                const totalTarget = (coll.target_amount || 0) * activeStudentCount;
+                
+                let participantCount = globalData.students.length;
+                if(isSel) {
+                    participantCount = globalData.students.filter(s => s.payments[collId]).length;
+                }
+                const totalTarget = isOpt ? 'Без ліміту' : (coll.target_amount || 0) * participantCount;
 
                 globalData.students.forEach(s => {
-                    const pay = s.payments[collId] || { required: coll.target_amount, paid: 0, receipt: null };
-                    totalCollected += pay.paid;
-                    const bal = pay.paid - pay.required;
-                    const balClass = bal >= 0 ? 'plus' : 'minus';
-                    const statusText = bal >= 0 ? (pay.required > 0 ? 'Сплачено' : 'Внесок') : `Заборгованість: ${Math.abs(bal)} грн`;
+                    const pay = s.payments[collId];
+
+                    if(!pay && isSel) {
+                        tbody.innerHTML += `
+                            <tr>
+                                <td>${s.id}</td>
+                                <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                                <td>-</td>
+                                <td><span class="badge neutral-badge">Не бере участь</span></td>
+                            </tr>
+                        `;
+                        return;
+                    }
+
+                    const currentPay = pay || { required: coll.target_amount, paid: 0, receipt: null };
+                    totalCollected += currentPay.paid;
+                    
+                    let statusHtml = '';
+                    if(isOpt) {
+                        statusHtml = `<span class="badge opt-badge">${currentPay.paid > 0 ? 'Внесок зроблено' : 'Добровільно'}</span>`;
+                    } else {
+                        const bal = currentPay.paid - currentPay.required;
+                        const balClass = bal >= 0 ? 'plus' : 'minus';
+                        const statusText = bal >= 0 ? (currentPay.required > 0 ? 'Сплачено' : 'Внесок') : `Заборгованість: ${Math.abs(bal)} грн`;
+                        statusHtml = `<span class="badge ${balClass}">${statusText}</span>`;
+                    }
 
                     let receiptHtml = '';
-                    if(pay.receipt) {
-                        receiptHtml = `<br><a class="receipt-link" href="/uploads/${pay.receipt}" target="_blank">🧾 Переглянути чек</a>`;
+                    if(currentPay.receipt) {
+                        receiptHtml = `<br><a class="receipt-link" href="/uploads/${currentPay.receipt}" target="_blank">🧾 Переглянути чек</a>`;
                     }
 
                     tbody.innerHTML += `
                         <tr>
                             <td>${s.id}</td>
                             <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
-                            <td>${pay.paid} / ${pay.required} грн ${receiptHtml}</td>
-                            <td><span class="badge ${balClass}">${statusText}</span></td>
+                            <td>${currentPay.paid} ${isOpt ? '' : '/ ' + currentPay.required} грн ${receiptHtml}</td>
+                            <td>${statusHtml}</td>
                         </tr>
                     `;
                 });
 
-                document.getElementById('stat-target').innerText = `${coll.target_amount} грн`;
+                document.getElementById('stat-target').innerText = isOpt ? 'За бажанням' : `${coll.target_amount} грн`;
                 document.getElementById('stat-total-collected').innerText = `${totalCollected} грн`;
-                document.getElementById('stat-total-target').innerText = `${totalTarget} грн`;
-                const progress = totalTarget > 0 ? Math.round((totalCollected / totalTarget) * 100) : (totalCollected > 0 ? 100 : 0);
-                document.getElementById('stat-progress').innerText = `${progress}%`;
+                document.getElementById('stat-total-target').innerText = typeof totalTarget === 'number' ? `${totalTarget} грн` : totalTarget;
+                
+                let progressText = '100%';
+                if(!isOpt && typeof totalTarget === 'number' && totalTarget > 0) {
+                    progressText = `${Math.round((totalCollected / totalTarget) * 100)}%`;
+                }
+                document.getElementById('stat-progress').innerText = progressText;
             }
         }
 
@@ -1024,7 +1189,6 @@ HTML_TEMPLATE = """
             document.getElementById('save-expense-btn').innerText = 'Зберегти зміни';
             document.getElementById('cancel-exp-edit-btn').style.display = 'block';
 
-            // Перемикаємо на вкладку адмінки
             const adminBtn = document.getElementById('admin-tab-btn');
             switchTab('admin-tab', adminBtn);
         }
@@ -1099,22 +1263,41 @@ HTML_TEMPLATE = """
         }
 
         async function createCollection() {
-            const is_class_fund = document.getElementById('new-coll-type').value;
+            const typeVal = document.getElementById('new-coll-type').value;
             const name = document.getElementById('new-coll-name').value;
             const target = document.getElementById('new-coll-target').value;
             const created_at = document.getElementById('new-coll-date').value;
 
             if(!name) return alert('Вкажіть назву/призначення збору!');
-            
+
+            const is_class_fund = typeVal === '1' ? 1 : 0;
+            const is_optional = typeVal === '2' ? 1 : 0;
+            const is_selective = typeVal === '3' ? 1 : 0;
+            const target_amount = is_optional ? 0 : parseFloat(target || 0);
+
+            let selected_students = [];
+            if(is_selective) {
+                document.querySelectorAll('.coll-student-cb:checked').forEach(cb => {
+                    selected_students.push(parseInt(cb.value));
+                });
+
+                if(selected_students.length === 0) {
+                    return alert('Оберіть хоча б одного учня для збору підгрупи!');
+                }
+            }
+
             const res = await fetch('/api/add_collection', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     user_id: currentUserId,
                     name,
-                    is_class_fund: parseInt(is_class_fund),
-                    target_amount: parseFloat(target || 0),
-                    created_at
+                    is_class_fund,
+                    is_optional,
+                    is_selective,
+                    target_amount,
+                    created_at,
+                    selected_students
                 })
             });
             const ans = await res.json();
@@ -1205,16 +1388,18 @@ def get_budget():
     c = conn.cursor()
 
     c.execute(
-        "SELECT id, name, is_class_fund, target_amount, created_at FROM"
-        " collections"
+        "SELECT id, name, is_class_fund, is_optional, is_selective,"
+        " target_amount, created_at FROM collections"
     )
     colls = [
         {
             "id": row[0],
             "name": row[1],
             "is_class_fund": row[2],
-            "target_amount": row[3],
-            "created_at": row[4] or "2026-01-01",
+            "is_optional": row[3] or 0,
+            "is_selective": row[4] or 0,
+            "target_amount": row[5],
+            "created_at": row[6] or "2026-01-01",
         }
         for row in c.fetchall()
     ]
@@ -1512,7 +1697,7 @@ def save_student():
 
         c.execute(
             "SELECT id, target_amount, created_at FROM collections WHERE"
-            " created_at >= ?",
+            " created_at >= ? AND is_selective=0",
             (date_added,),
         )
         colls = c.fetchall()
@@ -1561,29 +1746,40 @@ def add_collection():
 
     name = data.get("name")
     is_fund = data.get("is_class_fund", 0)
+    is_optional = data.get("is_optional", 0)
+    is_selective = data.get("is_selective", 0)
     target = data.get("target_amount", 0)
     created_at = data.get("created_at", datetime.now().strftime("%Y-%m-%d"))
+    selected_students = data.get("selected_students", [])
 
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO collections (name, is_class_fund, target_amount,"
-        " created_at) VALUES (?, ?, ?, ?)",
-        (name, is_fund, target, created_at),
+        "INSERT INTO collections (name, is_class_fund, is_optional,"
+        " is_selective, target_amount, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, is_fund, is_optional, is_selective, target, created_at),
     )
     coll_id = c.lastrowid
 
-    c.execute(
-        "SELECT id FROM students WHERE is_active=1 AND date_added <= ?",
-        (created_at,),
-    )
-    students = c.fetchall()
-    for s in students:
+    if is_selective:
+        for s_id in selected_students:
+            c.execute(
+                "INSERT INTO payments (student_id, collection_id, required,"
+                " paid) VALUES (?, ?, ?, 0)",
+                (s_id, coll_id, target),
+            )
+    else:
         c.execute(
-            "INSERT INTO payments (student_id, collection_id, required,"
-            " paid) VALUES (?, ?, ?, 0)",
-            (s[0], coll_id, target),
+            "SELECT id FROM students WHERE is_active=1 AND date_added <= ?",
+            (created_at,),
         )
+        students = c.fetchall()
+        for s in students:
+            c.execute(
+                "INSERT INTO payments (student_id, collection_id, required,"
+                " paid) VALUES (?, ?, ?, 0)",
+                (s[0], coll_id, target),
+            )
 
     conn.commit()
     conn.close()
