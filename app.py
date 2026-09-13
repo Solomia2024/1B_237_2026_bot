@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import traceback
 from datetime import datetime
 import psycopg
 from psycopg.rows import dict_row
@@ -33,7 +34,7 @@ def allowed_file(filename):
 # --- Робота з Google Drive ---
 def get_drive_service():
     if not GOOGLE_CREDENTIALS_JSON:
-        print("❌ DRIVE ERROR: GOOGLE_CREDENTIALS_JSON порожня або не зчитана!")
+        print("❌ DRIVE ERROR: GOOGLE_CREDENTIALS_JSON порожня або не зчитана!", flush=True)
         return None
     try:
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
@@ -43,23 +44,24 @@ def get_drive_service():
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"❌ DRIVE ERROR: Помилка авторизації/парсингу JSON: {e}")
+        print(f"❌ DRIVE ERROR: Помилка авторизації/парсингу JSON: {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
         return None
 
 def upload_file_to_drive(file_storage, filename):
-    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ НА GOOGLE DRIVE: {filename}")
+    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ НА GOOGLE DRIVE: {filename}", flush=True)
     
     if not GOOGLE_CREDENTIALS_JSON:
-        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_CREDENTIALS_JSON у Render!")
+        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_CREDENTIALS_JSON у Render!", flush=True)
         return None
 
     if not GOOGLE_DRIVE_FOLDER_ID:
-        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_DRIVE_FOLDER_ID у Render!")
+        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_DRIVE_FOLDER_ID у Render!", flush=True)
         return None
 
     service = get_drive_service()
     if not service:
-        print("❌ DRIVE ERROR: Не вдалося створити Google Drive Service!")
+        print("❌ DRIVE ERROR: Не вдалося створити Google Drive Service!", flush=True)
         return None
 
     try:
@@ -67,7 +69,7 @@ def upload_file_to_drive(file_storage, filename):
         file_bytes = file_storage.read()
         
         if not file_bytes:
-            print("❌ DRIVE ERROR: Файл порожній (0 байт)!")
+            print("❌ DRIVE ERROR: Файл порожній (0 байт)!", flush=True)
             return None
 
         file_metadata = {
@@ -93,10 +95,11 @@ def upload_file_to_drive(file_storage, filename):
         ).execute()
 
         web_link = file.get('webViewLink')
-        print(f"✅ DRIVE SUCCESS! URL: {web_link}")
+        print(f"✅ DRIVE SUCCESS! URL: {web_link}", flush=True)
         return web_link
     except Exception as e:
-        print(f"❌ DRIVE EXCEPTION: {e}")
+        print(f"❌ DRIVE EXCEPTION: {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
         return None
 
 # --- Робота з БД ---
@@ -107,7 +110,7 @@ def get_db_connection():
         conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
         return conn
     except Exception as e:
-        print(f"Помилка БД: {e}")
+        print(f"Помилка БД: {e}", flush=True)
         return None
 
 def is_user_admin(user_id):
@@ -212,7 +215,7 @@ def init_db():
 try:
     init_db()
 except Exception as e:
-    print(f"Помилка БД: {e}")
+    print(f"Помилка БД: {e}", flush=True)
 
 app = Flask(__name__)
 
@@ -222,7 +225,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Бюджет 1-Б класу (v2.0)</title>
+    <title>Бюджет 1-Б класу (v3.0 LogFlush)</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1402,10 +1405,7 @@ HTML_TEMPLATE = """
             formData.append('date_str', date_str);
 
             if(fileInput.files && fileInput.files.length > 0) {
-                alert('📎 Зчитано файл з поля: ' + fileInput.files[0].name);
                 formData.append('receipt', fileInput.files[0], fileInput.files[0].name);
-            } else {
-                alert('⚠️ Файл у полі витрат не вибрано!');
             }
 
             const res = await fetch('/api/add_expense', {
@@ -1510,7 +1510,6 @@ HTML_TEMPLATE = """
             formData.append('paid', paid);
 
             if(fileInput.files && fileInput.files.length > 0) {
-                alert('📎 Зчитано чек оплати: ' + fileInput.files[0].name);
                 formData.append('receipt', fileInput.files[0], fileInput.files[0].name);
             }
 
@@ -1771,10 +1770,9 @@ def add_expense():
     amount = float(request.form.get('amount', 0))
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
-    # 🔴 ПРИМУСОВИЙ ДРУК У ЛОГИ RENDER
-    print("--------------------------------------------------")
-    print(f"📋 [EXPENSE v2.0] Ключі request.files: {list(request.files.keys())}")
-    print(f"📋 [EXPENSE v2.0] Ключі request.form: {list(request.form.keys())}")
+    print("--------------------------------------------------", flush=True)
+    print(f"📋 [EXPENSE v3.0] request.files: {list(request.files.keys())}", flush=True)
+    print(f"📋 [EXPENSE v3.0] request.form: {list(request.form.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -1782,7 +1780,7 @@ def add_expense():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [EXPENSE v2.0] Зчитано файл: {file.filename}")
+            print(f"📥 [EXPENSE v3.0] Зчитано файл: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1793,10 +1791,10 @@ def add_expense():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [EXPENSE v2.0] Файл у полі 'receipt' порожній!")
+            print("⚠️ [EXPENSE v3.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [EXPENSE v2.0] 'receipt' ВІДСУТНІЙ у request.files!")
-    print("--------------------------------------------------")
+        print("⚠️ [EXPENSE v3.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+    print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
     if not conn:
@@ -1991,8 +1989,8 @@ def save_payment():
     c_id = request.form.get('collection_id')
     paid = float(request.form.get('paid', 0))
 
-    print("--------------------------------------------------")
-    print(f"📋 [PAYMENT v2.0] Ключі request.files: {list(request.files.keys())}")
+    print("--------------------------------------------------", flush=True)
+    print(f"📋 [PAYMENT v3.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -2000,7 +1998,7 @@ def save_payment():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [PAYMENT v2.0] Зчитано квитанцію: {file.filename}")
+            print(f"📥 [PAYMENT v3.0] Зчитано квитанцію: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -2010,10 +2008,10 @@ def save_payment():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [PAYMENT v2.0] Файл у полі 'receipt' порожній!")
+            print("⚠️ [PAYMENT v3.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [PAYMENT v2.0] 'receipt' ВІДСУТНІЙ у request.files!")
-    print("--------------------------------------------------")
+        print("⚠️ [PAYMENT v3.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+    print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
     if not conn:
