@@ -40,7 +40,7 @@ def get_drive_service():
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
         creds = Credentials.from_service_account_info(
             creds_dict,
-            scopes=['https://www.googleapis.com/auth/drive.file']
+            scopes=['https://www.googleapis.com/auth/drive']
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
@@ -55,7 +55,8 @@ def upload_file_to_drive(file_storage, filename):
         print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_CREDENTIALS_JSON у Render!", flush=True)
         return None
 
-    if not GOOGLE_DRIVE_FOLDER_ID:
+    folder_id = GOOGLE_DRIVE_FOLDER_ID.strip()
+    if not folder_id:
         print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_DRIVE_FOLDER_ID у Render!", flush=True)
         return None
 
@@ -74,7 +75,7 @@ def upload_file_to_drive(file_storage, filename):
 
         file_metadata = {
             'name': filename,
-            'parents': [GOOGLE_DRIVE_FOLDER_ID.strip()]
+            'parents': [folder_id]
         }
         
         media = MediaIoBaseUpload(
@@ -83,15 +84,21 @@ def upload_file_to_drive(file_storage, filename):
             resumable=True
         )
         
+        # 🔑 Ключеве виправлення: supportsAllDrives=True дозволяє писати у спільні папки без власної квоти
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, webViewLink'
+            fields='id, webViewLink',
+            supportsAllDrives=True
         ).execute()
 
+        file_id = file.get('id')
+
+        # Відкриваємо доступ за посиланням
         service.permissions().create(
-            fileId=file.get('id'),
-            body={'type': 'anyone', 'role': 'reader'}
+            fileId=file_id,
+            body={'type': 'anyone', 'role': 'reader'},
+            supportsAllDrives=True
         ).execute()
 
         web_link = file.get('webViewLink')
@@ -225,7 +232,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Бюджет 1-Б класу (v3.0 LogFlush)</title>
+    <title>Бюджет 1-Б класу (v4.0 DriveFix)</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1771,8 +1778,7 @@ def add_expense():
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
     print("--------------------------------------------------", flush=True)
-    print(f"📋 [EXPENSE v3.0] request.files: {list(request.files.keys())}", flush=True)
-    print(f"📋 [EXPENSE v3.0] request.form: {list(request.form.keys())}", flush=True)
+    print(f"📋 [EXPENSE v4.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -1780,7 +1786,7 @@ def add_expense():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [EXPENSE v3.0] Зчитано файл: {file.filename}", flush=True)
+            print(f"📥 [EXPENSE v4.0] Зчитано файл: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1791,9 +1797,9 @@ def add_expense():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [EXPENSE v3.0] Файл порожній!", flush=True)
+            print("⚠️ [EXPENSE v4.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [EXPENSE v3.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+        print("⚠️ [EXPENSE v4.0] 'receipt' ВІДСУТНІЙ!", flush=True)
     print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
@@ -1990,7 +1996,7 @@ def save_payment():
     paid = float(request.form.get('paid', 0))
 
     print("--------------------------------------------------", flush=True)
-    print(f"📋 [PAYMENT v3.0] request.files: {list(request.files.keys())}", flush=True)
+    print(f"📋 [PAYMENT v4.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -1998,7 +2004,7 @@ def save_payment():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [PAYMENT v3.0] Зчитано квитанцію: {file.filename}", flush=True)
+            print(f"📥 [PAYMENT v4.0] Зчитано квитанцію: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -2008,9 +2014,9 @@ def save_payment():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [PAYMENT v3.0] Файл порожній!", flush=True)
+            print("⚠️ [PAYMENT v4.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [PAYMENT v3.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+        print("⚠️ [PAYMENT v4.0] 'receipt' ВІДСУТНІЙ!", flush=True)
     print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
