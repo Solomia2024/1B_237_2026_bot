@@ -77,7 +77,6 @@ def init_db():
                 )"""
     )
 
-    # Міграція колонок для існуючих таблиць
     try:
         c.execute(
             "ALTER TABLE students ADD COLUMN date_added TEXT DEFAULT"
@@ -322,6 +321,7 @@ HTML_TEMPLATE = """
                         <th>Мета витрати</th>
                         <th>Сума</th>
                         <th>Чек</th>
+                        <th id="exp-actions-th" style="display:none;">Дії</th>
                     </tr>
                 </thead>
                 <tbody id="expenses-table-body"></tbody>
@@ -441,7 +441,9 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="card" style="border: 1px solid #ffd700;">
-            <h3>📉 Додати витрату</h3>
+            <h3 id="expense-form-title">📉 Додати / Редагувати витрату</h3>
+            <input type="hidden" id="edit-expense-id" value="">
+
             <label>Призначення (Збір):</label>
             <select id="expense-collection-select"></select>
 
@@ -456,8 +458,21 @@ HTML_TEMPLATE = """
 
             <label>🧾 Чек / Квитанція (опційно):</label>
             <input type="file" id="expense-receipt-file" accept="image/*,.pdf">
+            <div class="info-text" id="current-exp-receipt-hint"></div>
 
-            <button class="form-btn" style="background:#007aff;" onclick="saveExpense()">Зберегти витрату</button>
+            <button class="form-btn" id="save-expense-btn" style="background:#007aff;" onclick="saveExpense()">Зберегти витрату</button>
+            <button class="danger-btn" id="cancel-exp-edit-btn" style="display:none;" onclick="resetExpenseForm()">Скасувати редагування</button>
+        </div>
+
+        <div class="card" style="border: 2px solid #34c759;">
+            <h3>🔄 Перенести залишок збору до Фонду класу</h3>
+            <div class="info-text" style="color:#666;">Цей функціонал діє лише для зборів категорії «Інші збори».</div>
+            
+            <label>Оберіть цільовий збір:</label>
+            <select id="transfer-collection-select" onchange="updateTransferHint()"></select>
+            <div class="info-text" id="transfer-balance-hint">Доступний залишок для перенесення: 0 грн</div>
+
+            <button class="form-btn" style="background:#34c759;" onclick="transferBalanceToFund()">Перенести залишок у фонд класу</button>
         </div>
 
         <div class="card" style="border: 1px solid #ffcccc;">
@@ -503,6 +518,7 @@ HTML_TEMPLATE = """
                 document.getElementById('admin-tab-btn').style.display = 'block';
                 document.getElementById('student-detail-tab-btn').style.display = 'block';
                 document.getElementById('contacts-tab-btn').style.display = 'block';
+                document.getElementById('exp-actions-th').style.display = 'table-cell';
             }
 
             const pSelect = document.getElementById('parent-collection-filter');
@@ -522,11 +538,15 @@ HTML_TEMPLATE = """
                 const expCollSelect = document.getElementById('expense-collection-select');
                 const delSelect = document.getElementById('delete-collection-select');
                 const studReportSelect = document.getElementById('admin-student-report-select');
+                const transferSelect = document.getElementById('transfer-collection-select');
                 
                 collSelect.innerHTML = '';
                 expCollSelect.innerHTML = '';
                 delSelect.innerHTML = '';
                 studReportSelect.innerHTML = '';
+                transferSelect.innerHTML = '';
+
+                const otherCollections = globalData.collections.filter(c => c.is_class_fund === 0);
 
                 if(globalData.collections.length === 0) {
                     collSelect.innerHTML = '<option value="">Немає активних зборів</option>';
@@ -537,6 +557,14 @@ HTML_TEMPLATE = """
                         collSelect.innerHTML += `<option value="${c.id}">${c.name} (${c.target_amount} грн/учень)</option>`;
                         expCollSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                         delSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                    });
+                }
+
+                if(otherCollections.length === 0) {
+                    transferSelect.innerHTML = '<option value="">Немає зборів категорії "Інші збори"</option>';
+                } else {
+                    otherCollections.forEach(c => {
+                        transferSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                     });
                 }
 
@@ -551,6 +579,7 @@ HTML_TEMPLATE = """
                 });
 
                 updatePaymentInput();
+                updateTransferHint();
                 renderStudentReport();
                 renderContactsView();
             }
@@ -558,6 +587,73 @@ HTML_TEMPLATE = """
             renderParentView();
             renderCategoriesView();
             renderExpensesView();
+        }
+
+        function updateTransferHint() {
+            if(!globalData || !globalData.is_admin) return;
+            const cId = parseInt(document.getElementById('transfer-collection-select').value);
+            const hintElem = document.getElementById('transfer-balance-hint');
+            
+            if(!cId) {
+                hintElem.innerText = 'Доступний залишок для перенесення: 0 грн';
+                return;
+            }
+
+            let paidTot = 0;
+            globalData.all_students.forEach(s => {
+                if(s.payments[cId]) { paidTot += s.payments[cId].paid; }
+            });
+
+            let expTot = 0;
+            globalData.expenses.filter(e => e.collection_id === cId).forEach(e => {
+                expTot += e.amount;
+            });
+
+            let remBal = paidTot - expTot;
+            hintElem.innerText = `Доступний залишок для перенесення: ${remBal} грн`;
+            hintElem.style.color = remBal > 0 ? '#34c759' : (remBal < 0 ? '#d9534f' : '#666');
+        }
+
+        async function transferBalanceToFund() {
+            const collection_id = parseInt(document.getElementById('transfer-collection-select').value);
+            if(!collection_id) return alert('Оберіть збір для перенесення залишку!');
+
+            const coll = globalData.collections.find(c => c.id === collection_id);
+            if(!coll) return;
+
+            let paidTot = 0;
+            globalData.all_students.forEach(s => {
+                if(s.payments[collection_id]) { paidTot += s.payments[collection_id].paid; }
+            });
+
+            let expTot = 0;
+            globalData.expenses.filter(e => e.collection_id === collection_id).forEach(e => {
+                expTot += e.amount;
+            });
+
+            let remBal = paidTot - expTot;
+
+            if(remBal <= 0) {
+                return alert('У даного збору немає позитивного залишку для перенесення!');
+            }
+
+            if(!confirm(`Ви дійсно бажаєте перенести залишок у розмірі ${remBal} грн зі збору "${coll.name}" до Фонду класу?`)) return;
+
+            const res = await fetch('/api/transfer_to_fund', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: currentUserId,
+                    collection_id,
+                    amount: remBal
+                })
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Залишок успішно перенесено до Фонду класу!');
+            loadData();
         }
 
         function renderContactsView() {
@@ -873,13 +969,25 @@ HTML_TEMPLATE = """
             filteredExpenses.forEach(e => {
                 sumExp += e.amount;
                 let rHtml = e.receipt ? `<a class="receipt-link" href="/uploads/${e.receipt}" target="_blank">🧾 Чек</a>` : '-';
+                
+                let actionsHtml = '';
+                if(globalData.is_admin) {
+                    actionsHtml = `
+                        <td>
+                            <button class="action-btn" style="background:#007aff; color:white; margin-bottom:4px;" onclick="editExpense(${e.id})">✏️ Редагувати</button>
+                            <button class="action-btn danger-btn" onclick="deleteExpense(${e.id})">🗑 Видалити</button>
+                        </td>
+                    `;
+                }
+
                 tbody.innerHTML += `
                     <tr>
                         <td>${e.date_str}</td>
                         <td><b>${e.collection_name}</b></td>
                         <td>${e.purpose}</td>
-                        <td style="color:#d9534f; font-weight:bold;">-${e.amount} грн</td>
+                        <td style="color:${e.amount >= 0 ? '#d9534f' : '#34c759'}; font-weight:bold;">${e.amount >= 0 ? '-' : '+'}${Math.abs(e.amount)} грн</td>
                         <td>${rHtml}</td>
+                        ${actionsHtml}
                     </tr>
                 `;
             });
@@ -893,6 +1001,101 @@ HTML_TEMPLATE = """
             const netElem = document.getElementById('exp-net-balance');
             netElem.innerText = `${netBal} грн`;
             netElem.style.color = netBal >= 0 ? '#34c759' : '#d9534f';
+        }
+
+        function editExpense(id) {
+            const exp = globalData.expenses.find(e => e.id === id);
+            if(!exp) return;
+
+            document.getElementById('edit-expense-id').value = exp.id;
+            document.getElementById('expense-collection-select').value = exp.collection_id;
+            document.getElementById('expense-purpose').value = exp.purpose;
+            document.getElementById('expense-amount').value = exp.amount;
+            document.getElementById('expense-date').value = exp.date_str;
+
+            const hint = document.getElementById('current-exp-receipt-hint');
+            if(exp.receipt) {
+                hint.innerHTML = `📎 Поточний чек: <a href="/uploads/${exp.receipt}" target="_blank">Переглянути</a>`;
+            } else {
+                hint.innerText = '';
+            }
+
+            document.getElementById('expense-form-title').innerText = '✏️ Редагувати витрату';
+            document.getElementById('save-expense-btn').innerText = 'Зберегти зміни';
+            document.getElementById('cancel-exp-edit-btn').style.display = 'block';
+
+            // Перемикаємо на вкладку адмінки
+            const adminBtn = document.getElementById('admin-tab-btn');
+            switchTab('admin-tab', adminBtn);
+        }
+
+        function resetExpenseForm() {
+            document.getElementById('edit-expense-id').value = '';
+            document.getElementById('expense-purpose').value = '';
+            document.getElementById('expense-amount').value = '';
+            document.getElementById('expense-date').valueAsDate = new Date();
+            document.getElementById('expense-receipt-file').value = '';
+            document.getElementById('current-exp-receipt-hint').innerText = '';
+
+            document.getElementById('expense-form-title').innerText = '📉 Додати / Редагувати витрату';
+            document.getElementById('save-expense-btn').innerText = 'Зберегти витрату';
+            document.getElementById('cancel-exp-edit-btn').style.display = 'none';
+        }
+
+        async function saveExpense() {
+            const id = document.getElementById('edit-expense-id').value;
+            const collection_id = document.getElementById('expense-collection-select').value;
+            const purpose = document.getElementById('expense-purpose').value;
+            const amount = document.getElementById('expense-amount').value;
+            const date_str = document.getElementById('expense-date').value;
+            const fileInput = document.getElementById('expense-receipt-file');
+
+            if(!collection_id) return alert('Оберіть збір призначення!');
+            if(!purpose) return alert('Вкажіть мету витрати!');
+            if(!amount) return alert('Вкажіть суму витрати!');
+
+            const formData = new FormData();
+            formData.append('user_id', currentUserId);
+            if(id) formData.append('id', id);
+            formData.append('collection_id', collection_id);
+            formData.append('purpose', purpose);
+            formData.append('amount', amount);
+            formData.append('date_str', date_str);
+
+            if(fileInput.files.length > 0) {
+                formData.append('receipt', fileInput.files[0]);
+            }
+
+            const res = await fetch('/api/add_expense', {
+                method: 'POST',
+                body: formData
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Витрату успішно збережено!');
+            resetExpenseForm();
+            loadData();
+        }
+
+        async function deleteExpense(id) {
+            if(!confirm('Ви дійсно бажаєте видалити цю витрату?')) return;
+
+            const res = await fetch('/api/delete_expense', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: currentUserId,
+                    expense_id: id
+                })
+            });
+
+            const ans = await res.json();
+            if(ans.error) return alert(ans.error);
+
+            alert('Витрату видалено!');
+            loadData();
         }
 
         async function createCollection() {
@@ -951,43 +1154,6 @@ HTML_TEMPLATE = """
             if(ans.error) return alert(ans.error);
 
             alert('Оплату успішно збережено!');
-            fileInput.value = '';
-            loadData();
-        }
-
-        async function saveExpense() {
-            const collection_id = document.getElementById('expense-collection-select').value;
-            const purpose = document.getElementById('expense-purpose').value;
-            const amount = document.getElementById('expense-amount').value;
-            const date_str = document.getElementById('expense-date').value;
-            const fileInput = document.getElementById('expense-receipt-file');
-
-            if(!collection_id) return alert('Оберіть збір призначення!');
-            if(!purpose) return alert('Вкажіть мету витрати!');
-            if(!amount) return alert('Вкажіть суму витрати!');
-
-            const formData = new FormData();
-            formData.append('user_id', currentUserId);
-            formData.append('collection_id', collection_id);
-            formData.append('purpose', purpose);
-            formData.append('amount', amount);
-            formData.append('date_str', date_str);
-
-            if(fileInput.files.length > 0) {
-                formData.append('receipt', fileInput.files[0]);
-            }
-
-            const res = await fetch('/api/add_expense', {
-                method: 'POST',
-                body: formData
-            });
-
-            const ans = await res.json();
-            if(ans.error) return alert(ans.error);
-
-            alert('Витрату успішно додано!');
-            document.getElementById('expense-purpose').value = '';
-            document.getElementById('expense-amount').value = '';
             fileInput.value = '';
             loadData();
         }
@@ -1053,7 +1219,6 @@ def get_budget():
         for row in c.fetchall()
     ]
 
-    # Усі учні для адміна
     c.execute(
         "SELECT id, full_name, parent_name, phone, date_added, is_active FROM"
         " students"
@@ -1182,6 +1347,138 @@ def get_budget():
     })
 
 
+@app.route("/api/add_expense", methods=["POST"])
+def add_expense():
+    user_id = int(request.form.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    exp_id = request.form.get("id")
+    c_id = request.form.get("collection_id")
+    purpose = request.form.get("purpose")
+    amount = float(request.form.get("amount", 0))
+    date_str = request.form.get(
+        "date_str", datetime.now().strftime("%Y-%m-%d")
+    )
+
+    filename = None
+    if "receipt" in request.files:
+        file = request.files["receipt"]
+        if file and allowed_file(file.filename):
+            ext = file.filename.rsplit(".", 1)[1].lower()
+            timestamp = int(datetime.now().timestamp())
+            filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    if exp_id:
+        if filename:
+            c.execute(
+                "UPDATE expenses SET collection_id=?, purpose=?, amount=?,"
+                " date_str=?, receipt_filename=? WHERE id=?",
+                (c_id, purpose, amount, date_str, filename, exp_id),
+            )
+        else:
+            c.execute(
+                "UPDATE expenses SET collection_id=?, purpose=?, amount=?,"
+                " date_str=? WHERE id=?",
+                (c_id, purpose, amount, date_str, exp_id),
+            )
+    else:
+        c.execute(
+            "INSERT INTO expenses (collection_id, purpose, amount, date_str,"
+            " receipt_filename) VALUES (?, ?, ?, ?, ?)",
+            (c_id, purpose, amount, date_str, filename),
+        )
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/delete_expense", methods=["POST"])
+def delete_expense():
+    data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    exp_id = data.get("expense_id")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM expenses WHERE id=?", (exp_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/transfer_to_fund", methods=["POST"])
+def transfer_to_fund():
+    data = request.json
+    user_id = int(data.get("user_id", 0))
+
+    if user_id not in ADMIN_IDS:
+        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
+
+    c_id = data.get("collection_id")
+    amount = float(data.get("amount", 0))
+    date_str = datetime.now().strftime("%Y-%m-%d")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("SELECT name, is_class_fund FROM collections WHERE id=?", (c_id,))
+    coll_info = c.fetchone()
+
+    if not coll_info or coll_info[1] == 1:
+        conn.close()
+        return jsonify({
+            "error": (
+                "Перенесення залишку можливе лише для зборів категорії 'Інші"
+                " збори'!"
+            )
+        })
+
+    coll_name = coll_info[0]
+
+    c.execute(
+        "SELECT id FROM collections WHERE is_class_fund=1 ORDER BY id ASC"
+        " LIMIT 1"
+    )
+    fund_row = c.fetchone()
+
+    if not fund_row:
+        c.execute(
+            "INSERT INTO collections (name, is_class_fund, target_amount,"
+            " created_at) VALUES ('Фонд класу', 1, 0, ?)",
+            (date_str,),
+        )
+        fund_id = c.lastrowid
+    else:
+        fund_id = fund_row[0]
+
+    c.execute(
+        "INSERT INTO expenses (collection_id, purpose, amount, date_str)"
+        " VALUES (?, ?, ?, ?)",
+        (c_id, "Перенесено до фонду класу", amount, date_str),
+    )
+
+    c.execute(
+        "INSERT INTO expenses (collection_id, purpose, amount, date_str)"
+        " VALUES (?, ?, ?, ?)",
+        (fund_id, f"Поповнення з залишка збору: {coll_name}", -amount, date_str),
+    )
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/save_student", methods=["POST"])
 def save_student():
     data = request.json
@@ -1200,14 +1497,12 @@ def save_student():
     c = conn.cursor()
 
     if s_id:
-        # Редагування
         c.execute(
             "UPDATE students SET full_name=?, parent_name=?, phone=?,"
             " date_added=? WHERE id=?",
             (full_name, parent_name, phone, date_added, s_id),
         )
     else:
-        # Створення нового учня
         c.execute(
             "INSERT INTO students (full_name, parent_name, phone, date_added,"
             " is_active) VALUES (?, ?, ?, ?, 1)",
@@ -1215,7 +1510,6 @@ def save_student():
         )
         new_student_id = c.lastrowid
 
-        # Автоматично додаємо нарахування ЛИШЕ за зборами, ініційованими ПІСЛЯ або В ДЕНЬ зарахування учня
         c.execute(
             "SELECT id, target_amount, created_at FROM collections WHERE"
             " created_at >= ?",
@@ -1279,7 +1573,6 @@ def add_collection():
     )
     coll_id = c.lastrowid
 
-    # Збір нараховується ЛИШЕ АКТИВНИМ учням, доданим ДО або В ДЕНЬ створення збору
     c.execute(
         "SELECT id FROM students WHERE is_active=1 AND date_added <= ?",
         (created_at,),
@@ -1287,8 +1580,8 @@ def add_collection():
     students = c.fetchall()
     for s in students:
         c.execute(
-            "INSERT INTO payments (student_id, collection_id, required, paid)"
-            " VALUES (?, ?, ?, 0)",
+            "INSERT INTO payments (student_id, collection_id, required,"
+            " paid) VALUES (?, ?, ?, 0)",
             (s[0], coll_id, target),
         )
 
@@ -1335,41 +1628,6 @@ def save_payment():
             (s_id, c_id, paid),
         )
 
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "ok"})
-
-
-@app.route("/api/add_expense", methods=["POST"])
-def add_expense():
-    user_id = int(request.form.get("user_id", 0))
-
-    if user_id not in ADMIN_IDS:
-        return jsonify({"error": "Доступ заборонено! Ви не є адміністратором."})
-
-    c_id = request.form.get("collection_id")
-    purpose = request.form.get("purpose")
-    amount = float(request.form.get("amount", 0))
-    date_str = request.form.get(
-        "date_str", datetime.now().strftime("%Y-%m-%d")
-    )
-
-    filename = None
-    if "receipt" in request.files:
-        file = request.files["receipt"]
-        if file and allowed_file(file.filename):
-            ext = file.filename.rsplit(".", 1)[1].lower()
-            timestamp = int(datetime.now().timestamp())
-            filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO expenses (collection_id, purpose, amount, date_str,"
-        " receipt_filename) VALUES (?, ?, ?, ?, ?)",
-        (c_id, purpose, amount, date_str, filename),
-    )
     conn.commit()
     conn.close()
     return jsonify({"status": "ok"})
