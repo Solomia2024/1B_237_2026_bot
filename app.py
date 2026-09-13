@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
-# 🔴 Список Telegram ID адміністраторів (додано ваш ID)
+# 🔴 Список Telegram ID адміністраторів
 ADMIN_IDS = [945268466]
 
 DB_FILE = "class_budget.db"
@@ -135,6 +135,7 @@ HTML_TEMPLATE = """
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { border: 1px solid #e0e0e0; padding: 8px; text-align: left; }
         th { background: #007aff; color: white; }
+        tfoot tr td { background: #f8f9fa; font-weight: bold; }
         select, input, button.form-btn { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
         button.form-btn { background: #34c759; color: white; border: none; font-weight: bold; cursor: pointer; }
         button.danger-btn { background: #ff3b30; color: white; border: none; font-weight: bold; cursor: pointer; }
@@ -200,7 +201,6 @@ HTML_TEMPLATE = """
 
     <!-- ВКЛАДКА 2: КАТЕГОРІЇ ТА ГРАФІК -->
     <div id="categories-tab" class="tab-content">
-        <!-- ФІЛЬТР ДАТ -->
         <div class="card">
             <label><b>📅 Період аналізу даних:</b></label>
             <div class="date-range-grid">
@@ -215,13 +215,11 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- ГРАФІК КАТЕГОРІЙ -->
         <div class="card">
             <div class="cat-title">📈 Порівняльний графік бюджету</div>
             <canvas id="budgetChart" style="max-height: 250px;"></canvas>
         </div>
 
-        <!-- ФОНД КЛАСУ -->
         <div class="card">
             <div class="cat-title">🏫 Фонд класу</div>
             <div class="stat-grid">
@@ -244,7 +242,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- ІНШІ ЗБОРИ ЗАГАЛОМ -->
         <div class="card">
             <div class="cat-title">🎯 Інші збори загалом</div>
             <div class="stat-grid">
@@ -307,6 +304,35 @@ HTML_TEMPLATE = """
 
     <!-- ВКЛАДКА 4: АДМІНІСТРУВАННЯ -->
     <div id="admin-tab" class="tab-content">
+        <!-- БЛОК СТАТИСТИКИ ПО ОПРЕМУ УЧНЮ -->
+        <div class="card" style="border: 2px solid #007aff;">
+            <h3>👤 Статистика по окремому учню</h3>
+            <label>Оберіть учня для перегляду:</label>
+            <select id="admin-student-report-select" onchange="renderStudentReport()"></select>
+
+            <div style="overflow-x:auto; margin-top: 10px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Збір</th>
+                            <th>Потрібно</th>
+                            <th>Здано</th>
+                            <th>Баланс</th>
+                        </tr>
+                    </thead>
+                    <tbody id="admin-student-report-body"></tbody>
+                    <tfoot>
+                        <tr>
+                            <td><b>Всього</b></td>
+                            <td id="stud-rep-tot-req">0 грн</td>
+                            <td id="stud-rep-tot-paid">0 грн</td>
+                            <td id="stud-rep-tot-bal">0 грн</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+
         <div class="card">
             <h3>➕ Створити новий збір</h3>
             <label>Тип збору:</label>
@@ -420,10 +446,12 @@ HTML_TEMPLATE = """
                 const collSelect = document.getElementById('select-collection');
                 const expCollSelect = document.getElementById('expense-collection-select');
                 const delSelect = document.getElementById('delete-collection-select');
+                const studReportSelect = document.getElementById('admin-student-report-select');
                 
                 collSelect.innerHTML = '';
                 expCollSelect.innerHTML = '';
                 delSelect.innerHTML = '';
+                studReportSelect.innerHTML = '';
 
                 if(globalData.collections.length === 0) {
                     collSelect.innerHTML = '<option value="">Немає активних зборів</option>';
@@ -441,14 +469,59 @@ HTML_TEMPLATE = """
                 studSelect.innerHTML = '';
                 globalData.students.forEach(s => {
                     studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
+                    studReportSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
                 });
 
                 updatePaymentInput();
+                renderStudentReport();
             }
 
             renderParentView();
             renderCategoriesView();
             renderExpensesView();
+        }
+
+        function renderStudentReport() {
+            if(!globalData || !globalData.is_admin) return;
+            const sId = parseInt(document.getElementById('admin-student-report-select').value);
+            if(!sId) return;
+
+            const student = globalData.students.find(s => s.id === sId);
+            if(!student) return;
+
+            const tbody = document.getElementById('admin-student-report-body');
+            tbody.innerHTML = '';
+
+            let totReq = 0;
+            let totPaid = 0;
+
+            globalData.collections.forEach(c => {
+                const pay = student.payments[c.id] || { required: c.target_amount, paid: 0 };
+                const bal = pay.paid - pay.required;
+                
+                totReq += pay.required;
+                totPaid += pay.paid;
+
+                const balClass = bal >= 0 ? 'plus' : 'minus';
+                const typePrefix = c.is_class_fund ? '🏫' : '🎯';
+
+                tbody.innerHTML += `
+                    <tr>
+                        <td><b>${typePrefix} ${c.name}</b></td>
+                        <td>${pay.required} грн</td>
+                        <td>${pay.paid} грн</td>
+                        <td><span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span></td>
+                    </tr>
+                `;
+            });
+
+            const totBal = totPaid - totReq;
+            document.getElementById('stud-rep-tot-req').innerText = `${totReq} грн`;
+            document.getElementById('stud-rep-tot-paid').innerText = `${totPaid} грн`;
+            
+            const totBalElem = document.getElementById('stud-rep-tot-bal');
+            totBalElem.innerText = `${totBal >= 0 ? '+' : ''}${totBal} грн`;
+            totBalElem.className = `badge ${totBal >= 0 ? 'plus' : 'minus'}`;
         }
 
         function updatePaymentInput() {
