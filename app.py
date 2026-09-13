@@ -493,15 +493,20 @@ HTML_TEMPLATE = """
 
         let globalData = null;
         let myChart = null;
+        let currentUserId = 0;
 
-        // 🔴 Зчитування Telegram ID з перевіркою параметрів URL або Telegram SDK
-        let rawUserId = (tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user.id : 0;
-        let currentUserId = parseInt(rawUserId) || 0;
-
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('user_id')) {
-            currentUserId = parseInt(urlParams.get('user_id')) || currentUserId;
+        function getUserId() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('user_id')) {
+                return parseInt(urlParams.get('user_id')) || 0;
+            }
+            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                return parseInt(tg.initDataUnsafe.user.id) || 0;
+            }
+            return 0;
         }
+
+        currentUserId = getUserId();
 
         document.getElementById('expense-date').valueAsDate = new Date();
         document.getElementById('stud-date-added').valueAsDate = new Date();
@@ -557,8 +562,9 @@ HTML_TEMPLATE = """
         }
 
         async function loadData() {
-            const startD = document.getElementById('cat-start-date').value;
-            const endD = document.getElementById('cat-end-date').value;
+            currentUserId = getUserId();
+            const startD = document.getElementById('cat-start-date').value || '';
+            const endD = document.getElementById('cat-end-date').value || '';
 
             const res = await fetch(`/api/budget?user_id=${currentUserId}&start_date=${startD}&end_date=${endD}`);
             globalData = await res.json();
@@ -578,13 +584,15 @@ HTML_TEMPLATE = """
             const expFilter = document.getElementById('expense-collection-filter');
             expFilter.innerHTML = '<option value="all">🌐 Всі витрати</option>';
 
-            globalData.collections.forEach(c => {
-                let typePrefix = c.is_class_fund ? '🏫' : '📁';
-                if(c.is_optional) typePrefix = '💛';
-                if(c.is_selective) typePrefix = '👥';
-                pSelect.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
-                expFilter.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
-            });
+            if (globalData.collections) {
+                globalData.collections.forEach(c => {
+                    let typePrefix = c.is_class_fund ? '🏫' : '📁';
+                    if(c.is_optional) typePrefix = '💛';
+                    if(c.is_selective) typePrefix = '👥';
+                    pSelect.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
+                    expFilter.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
+                });
+            }
 
             if(globalData.is_admin) {
                 const collSelect = document.getElementById('select-collection');
@@ -599,9 +607,9 @@ HTML_TEMPLATE = """
                 studReportSelect.innerHTML = '';
                 transferSelect.innerHTML = '';
 
-                const otherCollections = globalData.collections.filter(c => c.is_class_fund === 0 && !c.is_optional);
+                const otherCollections = (globalData.collections || []).filter(c => c.is_class_fund === 0 && !c.is_optional);
 
-                if(globalData.collections.length === 0) {
+                if(!globalData.collections || globalData.collections.length === 0) {
                     collSelect.innerHTML = '<option value="">Немає активних зборів</option>';
                     expCollSelect.innerHTML = '<option value="">Немає активних зборів</option>';
                     delSelect.innerHTML = '<option value="">Немає активних зборів</option>';
@@ -625,11 +633,11 @@ HTML_TEMPLATE = """
 
                 const studSelect = document.getElementById('select-student');
                 studSelect.innerHTML = '';
-                globalData.all_students.filter(s => s.is_active === 1).forEach(s => {
+                (globalData.all_students || []).filter(s => s.is_active === 1).forEach(s => {
                     studSelect.innerHTML += `<option value="${s.id}">${s.full_name}</option>`;
                 });
 
-                globalData.all_students.forEach(s => {
+                (globalData.all_students || []).forEach(s => {
                     studReportSelect.innerHTML += `<option value="${s.id}">${s.full_name} ${s.is_active ? '' : '(вибув)'}</option>`;
                 });
 
@@ -655,12 +663,12 @@ HTML_TEMPLATE = """
             }
 
             let paidTot = 0;
-            globalData.all_students.forEach(s => {
-                if(s.payments[cId]) { paidTot += s.payments[cId].paid; }
+            (globalData.all_students || []).forEach(s => {
+                if(s.payments && s.payments[cId]) { paidTot += s.payments[cId].paid; }
             });
 
             let expTot = 0;
-            globalData.expenses.filter(e => e.collection_id === cId).forEach(e => {
+            (globalData.expenses || []).filter(e => e.collection_id === cId).forEach(e => {
                 expTot += e.amount;
             });
 
@@ -716,7 +724,7 @@ HTML_TEMPLATE = """
             const tbody = document.getElementById('contacts-table-body');
             tbody.innerHTML = '';
 
-            globalData.all_students.forEach(s => {
+            (globalData.all_students || []).forEach(s => {
                 const statusBadge = s.is_active ? '<span class="badge plus">Активний</span>' : '<span class="badge minus">Вибув</span>';
                 const toggleBtnText = s.is_active ? 'Деактивувати' : 'Активувати';
                 const toggleBtnClass = s.is_active ? 'danger-btn' : 'form-btn';
@@ -796,7 +804,7 @@ HTML_TEMPLATE = """
         async function toggleStudentActive(student_id, current_status) {
             const new_status = current_status ? 0 : 1;
             const confirmMsg = current_status ? 
-                'Ви дійсно бажаєте перевести учня у статус "Вибув"?Його не буде видно в списках батьків, але історія збережеться.' : 
+                'Ви дійсно бажаєте перевести учня у статус "Вибув"? Його не буде видно в списках батьків, але історія збережеться.' : 
                 'Відновити активний статус учня?';
 
             if(!confirm(confirmMsg)) return;
@@ -831,8 +839,8 @@ HTML_TEMPLATE = """
             let totReq = 0;
             let totPaid = 0;
 
-            globalData.collections.forEach(c => {
-                const pay = student.payments[c.id];
+            (globalData.collections || []).forEach(c => {
+                const pay = student.payments ? student.payments[c.id] : null;
                 const isOpt = c.is_optional === 1;
 
                 if(pay) {
@@ -886,7 +894,7 @@ HTML_TEMPLATE = """
             if(!cId || !sId) return;
 
             const student = globalData.all_students.find(s => s.id === sId);
-            const payData = (student && student.payments[cId]) ? student.payments[cId] : { paid: 0, receipt: null };
+            const payData = (student && student.payments && student.payments[cId]) ? student.payments[cId] : { paid: 0, receipt: null };
 
             document.getElementById('pay-amount').value = payData.paid;
             document.getElementById('current-paid-hint').innerText = `Поточна сплачена сума у базі: ${payData.paid} грн`;
@@ -900,12 +908,14 @@ HTML_TEMPLATE = """
         }
 
         function renderParentView() {
-            if(!globalData) return;
+            if(!globalData || !globalData.students) return;
             const selectedVal = document.getElementById('parent-collection-filter').value;
             const tbody = document.getElementById('parent-table-body');
             tbody.innerHTML = '';
 
-            if (selectedVal === 'all') {
+            const collections = globalData.collections || [];
+
+            if (selectedVal === 'all' || !selectedVal) {
                 let totalCollectedAll = 0;
                 let totalTargetAll = 0;
 
@@ -913,8 +923,8 @@ HTML_TEMPLATE = """
                     let sPaidMandatory = 0;
                     let sReqMandatory = 0;
 
-                    globalData.collections.filter(c => c.is_optional === 0).forEach(c => {
-                        const p = s.payments[c.id];
+                    collections.filter(c => c.is_optional === 0).forEach(c => {
+                        const p = s.payments ? s.payments[c.id] : null;
                         if(p) {
                             sPaidMandatory += p.paid;
                             sReqMandatory += p.required;
@@ -925,18 +935,26 @@ HTML_TEMPLATE = """
                     totalTargetAll += sReqMandatory;
 
                     const bal = sPaidMandatory - sReqMandatory;
-                    const balClass = bal >= 0 ? 'plus' : 'minus';
+                    let balBadge = '';
+
+                    if (collections.length === 0) {
+                        balBadge = '<span class="badge neutral-badge">Заборгованість відсутня</span>';
+                    } else {
+                        const balClass = bal >= 0 ? 'plus' : 'minus';
+                        balBadge = `<span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span>`;
+                    }
+
                     tbody.innerHTML += `
                         <tr>
                             <td>${s.id}</td>
-                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name || ''}</small></td>
                             <td>${sPaidMandatory} грн</td>
-                            <td><span class="badge ${balClass}">${bal >= 0 ? '+' : ''}${bal} грн</span></td>
+                            <td>${balBadge}</td>
                         </tr>
                     `;
                 });
 
-                document.getElementById('stat-target').innerText = '-';
+                document.getElementById('stat-target').innerText = '0 грн';
                 document.getElementById('stat-total-collected').innerText = `${totalCollectedAll} грн`;
                 document.getElementById('stat-total-target').innerText = `${totalTargetAll} грн`;
                 const progress = totalTargetAll > 0 ? Math.round((totalCollectedAll / totalTargetAll) * 100) : 100;
@@ -948,8 +966,8 @@ HTML_TEMPLATE = """
                 globalData.students.forEach(s => {
                     let sPaidOpt = 0;
 
-                    globalData.collections.filter(c => c.is_optional === 1).forEach(c => {
-                        const p = s.payments[c.id] || { paid: 0 };
+                    collections.filter(c => c.is_optional === 1).forEach(c => {
+                        const p = (s.payments && s.payments[c.id]) ? s.payments[c.id] : { paid: 0 };
                         sPaidOpt += p.paid;
                     });
 
@@ -958,7 +976,7 @@ HTML_TEMPLATE = """
                     tbody.innerHTML += `
                         <tr>
                             <td>${s.id}</td>
-                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name || ''}</small></td>
                             <td>${sPaidOpt} грн</td>
                             <td><span class="badge opt-badge">Внесок за бажанням</span></td>
                         </tr>
@@ -972,7 +990,7 @@ HTML_TEMPLATE = """
 
             } else {
                 const collId = parseInt(selectedVal);
-                const coll = globalData.collections.find(c => c.id === collId);
+                const coll = collections.find(c => c.id === collId);
                 if(!coll) return;
 
                 const isOpt = coll.is_optional === 1;
@@ -981,18 +999,18 @@ HTML_TEMPLATE = """
                 
                 let participantCount = globalData.students.length;
                 if(isSel) {
-                    participantCount = globalData.students.filter(s => s.payments[collId]).length;
+                    participantCount = globalData.students.filter(s => s.payments && s.payments[collId]).length;
                 }
                 const totalTarget = isOpt ? 'Без ліміту' : (coll.target_amount || 0) * participantCount;
 
                 globalData.students.forEach(s => {
-                    const pay = s.payments[collId];
+                    const pay = s.payments ? s.payments[collId] : null;
 
                     if(!pay && isSel) {
                         tbody.innerHTML += `
                             <tr>
                                 <td>${s.id}</td>
-                                <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                                <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name || ''}</small></td>
                                 <td>-</td>
                                 <td><span class="badge neutral-badge">Не бере участь</span></td>
                             </tr>
@@ -1021,7 +1039,7 @@ HTML_TEMPLATE = """
                     tbody.innerHTML += `
                         <tr>
                             <td>${s.id}</td>
-                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name}</small></td>
+                            <td><b>${s.full_name}</b><br><small style="color:#666">${s.parent_name || ''}</small></td>
                             <td>${currentPay.paid} ${isOpt ? '' : '/ ' + currentPay.required} грн ${receiptHtml}</td>
                             <td>${statusHtml}</td>
                         </tr>
@@ -1104,9 +1122,9 @@ HTML_TEMPLATE = """
             const tbody = document.getElementById('expenses-table-body');
             tbody.innerHTML = '';
 
-            let filteredExpenses = globalData.expenses;
+            let filteredExpenses = globalData.expenses || [];
             if(filterId !== 'all') {
-                filteredExpenses = globalData.expenses.filter(e => e.collection_id === parseInt(filterId));
+                filteredExpenses = filteredExpenses.filter(e => e.collection_id === parseInt(filterId));
             }
 
             let sumExp = 0;
@@ -1138,8 +1156,8 @@ HTML_TEMPLATE = """
 
             document.getElementById('exp-total-amount').innerText = `${sumExp} грн`;
             
-            let totalCollectedAll = globalData.all_students.reduce((acc, s) => acc + s.total_paid, 0);
-            let totalExpAll = globalData.expenses.reduce((acc, e) => acc + parseFloat(e.amount), 0);
+            let totalCollectedAll = (globalData.all_students || []).reduce((acc, s) => acc + s.total_paid, 0);
+            let totalExpAll = (globalData.expenses || []).reduce((acc, e) => acc + parseFloat(e.amount), 0);
             let netBal = totalCollectedAll - totalExpAll;
             
             const netElem = document.getElementById('exp-net-balance');
@@ -1550,7 +1568,7 @@ def transfer_to_fund():
     if not coll_info or coll_info['is_class_fund'] == 1:
         c.close()
         conn.close()
-        return jsonify({'error': 'Перенесення залишку можливе лише для зборів категорії "Інші збори"!'})
+        return jsonify({'error': 'Перенесення за raw_zalyshku можливе лише для зборів категорії "Інші збори"!'})
 
     coll_name = coll_info['name']
 
@@ -1724,7 +1742,10 @@ def delete_collection():
     return jsonify({'status': 'ok'})
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("📊 Відкрити бюджет класу", web_app=WebAppInfo(url=WEB_APP_URL))]]
+    user_id = update.effective_user.id
+    app_url_with_id = f"{WEB_APP_URL}?user_id={user_id}"
+    
+    kb = [[InlineKeyboardButton("📊 Відкрити бюджет класу", web_app=WebAppInfo(url=app_url_with_id))]]
     await update.message.reply_text("👋 Вітаємо в системі обліку бюджету 1-Б класу!\nНатисніть кнопку нижче для перегляду:", reply_markup=InlineKeyboardMarkup(kb))
 
 def run_bot():
