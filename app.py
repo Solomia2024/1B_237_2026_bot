@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
-# 🔴 Список Telegram ID адміністраторів
+# 🔴 Список Telegram ID адміністраторів (додано ваш ID)
 ADMIN_IDS = [945268466]
 
 DB_FILE = "class_budget.db"
@@ -119,18 +119,19 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Бюджет 1-Б класу</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f4f7; padding: 10px; margin:0; }
-        .nav { display: flex; gap: 5px; margin-bottom: 15px; }
-        .nav button { flex: 1; padding: 10px 4px; border: none; background: #e5e5ea; border-radius: 8px; font-weight: bold; font-size: 12px; cursor: pointer; }
+        .nav { display: flex; gap: 4px; margin-bottom: 15px; }
+        .nav button { flex: 1; padding: 10px 2px; border: none; background: #e5e5ea; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; }
         .nav button.active { background: #007aff; color: white; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
         .card { background: white; border-radius: 10px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
         .stat-box { background: #f8f9fa; border-radius: 8px; padding: 10px; text-align: center; border: 1px solid #eee; }
         .stat-box .title { font-size: 11px; color: #666; font-weight: bold; text-transform: uppercase; }
-        .stat-box .val { font-size: 16px; font-weight: bold; color: #007aff; margin-top: 4px; }
+        .stat-box .val { font-size: 15px; font-weight: bold; color: #007aff; margin-top: 4px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th, td { border: 1px solid #e0e0e0; padding: 8px; text-align: left; }
         th { background: #007aff; color: white; }
@@ -142,16 +143,19 @@ HTML_TEMPLATE = """
         .minus { background: #f8d7da; color: #721c24; }
         .info-text { font-size: 12px; color: #007aff; margin-top: -6px; margin-bottom: 10px; font-weight: 500; }
         .receipt-link { font-size: 12px; color: #007aff; text-decoration: underline; font-weight: bold; display: block; margin-top: 4px; }
+        .cat-title { font-size: 15px; font-weight: bold; margin-bottom: 8px; border-bottom: 2px solid #007aff; padding-bottom: 4px; color: #333; }
+        .date-range-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     </style>
 </head>
 <body>
     <div class="nav">
-        <button class="active" onclick="switchTab('view-tab', this)">📊 Збори</button>
+        <button class="active" onclick="switchTab('view-tab', this)">📋 Учні</button>
+        <button onclick="switchTab('categories-tab', this)">📊 Категорії</button>
         <button onclick="switchTab('expenses-tab', this)">📉 Витрати</button>
         <button id="admin-tab-btn" style="display:none;" onclick="switchTab('admin-tab', this)">⚙️ Адмінка</button>
     </div>
 
-    <!-- ВКЛАДКА 1: ДЛЯ БАТЬКІВ (ЗБОРИ) -->
+    <!-- ВКЛАДКА 1: УЧНІ -->
     <div id="view-tab" class="tab-content active">
         <div class="card">
             <label><b>Оберіть збір для аналізу:</b></label>
@@ -194,7 +198,77 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ВКЛАДКА 2: ДЛЯ БАТЬКІВ (ВИРАТИ) -->
+    <!-- ВКЛАДКА 2: КАТЕГОРІЇ ТА ГРАФІК -->
+    <div id="categories-tab" class="tab-content">
+        <!-- ФІЛЬТР ДАТ -->
+        <div class="card">
+            <label><b>📅 Період аналізу даних:</b></label>
+            <div class="date-range-grid">
+                <div>
+                    <small>Від:</small>
+                    <input type="date" id="cat-start-date" onchange="loadData()">
+                </div>
+                <div>
+                    <small>До:</small>
+                    <input type="date" id="cat-end-date" onchange="loadData()">
+                </div>
+            </div>
+        </div>
+
+        <!-- ГРАФІК КАТЕГОРІЙ -->
+        <div class="card">
+            <div class="cat-title">📈 Порівняльний графік бюджету</div>
+            <canvas id="budgetChart" style="max-height: 250px;"></canvas>
+        </div>
+
+        <!-- ФОНД КЛАСУ -->
+        <div class="card">
+            <div class="cat-title">🏫 Фонд класу</div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="title">Потрібно зібрати</div>
+                    <div class="val" id="cat-fund-target">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Зібрано коштів</div>
+                    <div class="val" id="cat-fund-paid" style="color:#34c759;">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Витрачено</div>
+                    <div class="val" id="cat-fund-exp" style="color:#d9534f;">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Залишок</div>
+                    <div class="val" id="cat-fund-bal">0 грн</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ІНШІ ЗБОРИ ЗАГАЛОМ -->
+        <div class="card">
+            <div class="cat-title">🎯 Інші збори загалом</div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="title">Потрібно зібрати</div>
+                    <div class="val" id="cat-other-target">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Зібрано коштів</div>
+                    <div class="val" id="cat-other-paid" style="color:#34c759;">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Витрачено</div>
+                    <div class="val" id="cat-other-exp" style="color:#d9534f;">0 грн</div>
+                </div>
+                <div class="stat-box">
+                    <div class="title">Залишок</div>
+                    <div class="val" id="cat-other-bal">0 грн</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 3: ВИРАТИ -->
     <div id="expenses-tab" class="tab-content">
         <div class="card">
             <label><b>Фільтр витрат за збором:</b></label>
@@ -231,7 +305,7 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ВКЛАДКА 3: АДМІНІСТРУВАННЯ -->
+    <!-- ВКЛАДКА 4: АДМІНІСТРУВАННЯ -->
     <div id="admin-tab" class="tab-content">
         <div class="card">
             <h3>➕ Створити новий збір</h3>
@@ -302,10 +376,15 @@ HTML_TEMPLATE = """
         tg.expand();
 
         let globalData = null;
+        let myChart = null;
         let currentUserId = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 0;
 
-        // Встановлення сьогоднішньої дати за замовчуванням
         document.getElementById('expense-date').valueAsDate = new Date();
+
+        const today = new Date();
+        const startOfYear = new Date(today.getFullYear(), 0, 1);
+        document.getElementById('cat-start-date').valueAsDate = startOfYear;
+        document.getElementById('cat-end-date').valueAsDate = today;
 
         function switchTab(tabId, btn) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -315,18 +394,19 @@ HTML_TEMPLATE = """
         }
 
         async function loadData() {
-            const res = await fetch(`/api/budget?user_id=${currentUserId}`);
+            const startD = document.getElementById('cat-start-date').value;
+            const endD = document.getElementById('cat-end-date').value;
+
+            const res = await fetch(`/api/budget?user_id=${currentUserId}&start_date=${startD}&end_date=${endD}`);
             globalData = await res.json();
             
             if(globalData.is_admin) {
                 document.getElementById('admin-tab-btn').style.display = 'block';
             }
 
-            // Селект для зборів (вкладка 1)
             const pSelect = document.getElementById('parent-collection-filter');
             pSelect.innerHTML = '<option value="all">🌐 Зведений звіт (Всі збори)</option>';
             
-            // Селект для фільтру витрат (вкладка 2)
             const expFilter = document.getElementById('expense-collection-filter');
             expFilter.innerHTML = '<option value="all">🌐 Всі витрати</option>';
 
@@ -336,7 +416,6 @@ HTML_TEMPLATE = """
                 expFilter.innerHTML += `<option value="${c.id}">${typePrefix} ${c.name}</option>`;
             });
 
-            // Адмінські селекти
             if(globalData.is_admin) {
                 const collSelect = document.getElementById('select-collection');
                 const expCollSelect = document.getElementById('expense-collection-select');
@@ -368,6 +447,7 @@ HTML_TEMPLATE = """
             }
 
             renderParentView();
+            renderCategoriesView();
             renderExpensesView();
         }
 
@@ -461,6 +541,64 @@ HTML_TEMPLATE = """
             }
         }
 
+        function renderCategoriesView() {
+            if(!globalData || !globalData.category_stats) return;
+
+            const cs = globalData.category_stats;
+
+            document.getElementById('cat-fund-target').innerText = `${cs.fund.target} грн`;
+            document.getElementById('cat-fund-paid').innerText = `${cs.fund.paid} грн`;
+            document.getElementById('cat-fund-exp').innerText = `${cs.fund.exp} грн`;
+            
+            const fundBalElem = document.getElementById('cat-fund-bal');
+            fundBalElem.innerText = `${cs.fund.balance} грн`;
+            fundBalElem.style.color = cs.fund.balance >= 0 ? '#34c759' : '#d9534f';
+
+            document.getElementById('cat-other-target').innerText = `${cs.other.target} грн`;
+            document.getElementById('cat-other-paid').innerText = `${cs.other.paid} грн`;
+            document.getElementById('cat-other-exp').innerText = `${cs.other.exp} грн`;
+
+            const otherBalElem = document.getElementById('cat-other-bal');
+            otherBalElem.innerText = `${cs.other.balance} грн`;
+            otherBalElem.style.color = cs.other.balance >= 0 ? '#34c759' : '#d9534f';
+
+            const ctx = document.getElementById('budgetChart').getContext('2d');
+            if (myChart) { myChart.destroy(); }
+
+            myChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['🏫 Фонд класу', '🎯 Інші збори'],
+                    datasets: [
+                        {
+                            label: 'Потрібно',
+                            data: [cs.fund.target, cs.other.target],
+                            backgroundColor: '#007aff'
+                        },
+                        {
+                            label: 'Зібрано',
+                            data: [cs.fund.paid, cs.other.paid],
+                            backgroundColor: '#34c759'
+                        },
+                        {
+                            label: 'Витрачено',
+                            data: [cs.fund.exp, cs.other.exp],
+                            backgroundColor: '#ff3b30'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' }
+                    },
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
         function renderExpensesView() {
             if(!globalData) return;
             const filterId = document.getElementById('expense-collection-filter').value;
@@ -489,7 +627,6 @@ HTML_TEMPLATE = """
 
             document.getElementById('exp-total-amount').innerText = `${sumExp} грн`;
             
-            // Чистий залишок = Всього зібрано - Всього витрачено
             let totalCollectedAll = globalData.students.reduce((acc, s) => acc + s.total_paid, 0);
             let totalExpAll = globalData.expenses.reduce((acc, e) => acc + e.amount, 0);
             let netBal = totalCollectedAll - totalExpAll;
@@ -631,6 +768,9 @@ def uploaded_file(filename):
 @app.route("/api/budget")
 def get_budget():
     user_id = int(request.args.get("user_id", 0))
+    start_date = request.args.get("start_date", "")
+    end_date = request.args.get("end_date", "")
+
     is_admin = user_id in ADMIN_IDS
 
     conn = sqlite3.connect(DB_FILE)
@@ -684,12 +824,21 @@ def get_budget():
             "balance": total_paid - total_required,
         })
 
-    # Отримання списку всіх витрат
-    c.execute(
-        "SELECT e.id, e.collection_id, c.name, e.purpose, e.amount, e.date_str,"
-        " e.receipt_filename FROM expenses e JOIN collections c ON"
-        " e.collection_id = c.id ORDER BY e.id DESC"
-    )
+    if start_date and end_date:
+        c.execute(
+            "SELECT e.id, e.collection_id, c.name, e.purpose, e.amount,"
+            " e.date_str, e.receipt_filename FROM expenses e JOIN collections c"
+            " ON e.collection_id = c.id WHERE e.date_str >= ? AND e.date_str"
+            " <= ? ORDER BY e.id DESC",
+            (start_date, end_date),
+        )
+    else:
+        c.execute(
+            "SELECT e.id, e.collection_id, c.name, e.purpose, e.amount,"
+            " e.date_str, e.receipt_filename FROM expenses e JOIN collections c"
+            " ON e.collection_id = c.id ORDER BY e.id DESC"
+        )
+
     expenses_list = [
         {
             "id": row[0],
@@ -703,11 +852,52 @@ def get_budget():
         for row in c.fetchall()
     ]
 
+    category_stats = {
+        "fund": {"target": 0, "paid": 0, "exp": 0, "balance": 0},
+        "other": {"target": 0, "paid": 0, "exp": 0, "balance": 0},
+    }
+
+    for coll in colls:
+        c_id = coll["id"]
+        is_fund = coll["is_class_fund"]
+        cat_key = "fund" if is_fund == 1 else "other"
+
+        c.execute(
+            "SELECT SUM(required) FROM payments WHERE collection_id=?", (c_id,)
+        )
+        category_stats[cat_key]["target"] += c.fetchone()[0] or 0
+
+        c.execute(
+            "SELECT SUM(paid) FROM payments WHERE collection_id=?", (c_id,)
+        )
+        category_stats[cat_key]["paid"] += c.fetchone()[0] or 0
+
+        if start_date and end_date:
+            c.execute(
+                "SELECT SUM(amount) FROM expenses WHERE collection_id=? AND"
+                " date_str >= ? AND date_str <= ?",
+                (c_id, start_date, end_date),
+            )
+        else:
+            c.execute(
+                "SELECT SUM(amount) FROM expenses WHERE collection_id=?", (c_id,)
+            )
+
+        category_stats[cat_key]["exp"] += c.fetchone()[0] or 0
+
+    category_stats["fund"]["balance"] = (
+        category_stats["fund"]["paid"] - category_stats["fund"]["exp"]
+    )
+    category_stats["other"]["balance"] = (
+        category_stats["other"]["paid"] - category_stats["other"]["exp"]
+    )
+
     conn.close()
     return jsonify({
         "students": student_list,
         "collections": colls,
         "expenses": expenses_list,
+        "category_stats": category_stats,
         "is_admin": is_admin,
     })
 
