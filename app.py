@@ -3,8 +3,8 @@ import io
 import json
 import asyncio
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -87,12 +87,12 @@ def upload_file_to_drive(file_storage, filename):
         print(f"Помилка завантаження файлу на Google Диск: {e}")
         return None
 
-# --- Робота з Базою Даних ---
+# --- Робота з Базою Даних (psycopg 3) ---
 def get_db_connection():
     if not DATABASE_URL:
         return None
     try:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
         return conn
     except Exception as e:
         print(f"Помилка підключення до БД: {e}")
