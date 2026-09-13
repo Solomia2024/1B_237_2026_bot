@@ -11,7 +11,7 @@ TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com")
 
 # 🔴 Список Telegram ID адміністраторів (Артем та другий адмін)
-ADMIN_IDS = [945268466, 114251065]
+ADMIN_IDS = [114251065]
 
 DB_FILE = "class_budget.db"
 UPLOAD_FOLDER = 'receipts'
