@@ -78,13 +78,13 @@ def upload_file_to_drive(file_storage, filename):
             'parents': [folder_id]
         }
         
+        # 🔑 Ключове виправлення: resumable=False дозволяє оминути обмеження storageQuotaExceeded для сервісних акаунтів
         media = MediaIoBaseUpload(
             io.BytesIO(file_bytes),
             mimetype=file_storage.mimetype or 'application/octet-stream',
-            resumable=True
+            resumable=False
         )
         
-        # 🔑 Ключеве виправлення: supportsAllDrives=True дозволяє писати у спільні папки без власної квоти
         file = service.files().create(
             body=file_metadata,
             media_body=media,
@@ -232,7 +232,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Бюджет 1-Б класу (v4.0 DriveFix)</title>
+    <title>Бюджет 1-Б класу (v5.0 DirectUpload)</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1778,7 +1778,7 @@ def add_expense():
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
     print("--------------------------------------------------", flush=True)
-    print(f"📋 [EXPENSE v4.0] request.files: {list(request.files.keys())}", flush=True)
+    print(f"📋 [EXPENSE v5.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -1786,7 +1786,7 @@ def add_expense():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [EXPENSE v4.0] Зчитано файл: {file.filename}", flush=True)
+            print(f"📥 [EXPENSE v5.0] Зчитано файл: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1797,9 +1797,9 @@ def add_expense():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [EXPENSE v4.0] Файл порожній!", flush=True)
+            print("⚠️ [EXPENSE v5.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [EXPENSE v4.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+        print("⚠️ [EXPENSE v5.0] 'receipt' ВІДСУТНІЙ!", flush=True)
     print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
@@ -1996,7 +1996,7 @@ def save_payment():
     paid = float(request.form.get('paid', 0))
 
     print("--------------------------------------------------", flush=True)
-    print(f"📋 [PAYMENT v4.0] request.files: {list(request.files.keys())}", flush=True)
+    print(f"📋 [PAYMENT v5.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -2004,7 +2004,7 @@ def save_payment():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [PAYMENT v4.0] Зчитано квитанцію: {file.filename}", flush=True)
+            print(f"📥 [PAYMENT v5.0] Зчитано квитанцію: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -2014,9 +2014,9 @@ def save_payment():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [PAYMENT v4.0] Файл порожній!", flush=True)
+            print("⚠️ [PAYMENT v5.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [PAYMENT v4.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+        print("⚠️ [PAYMENT v5.0] 'receipt' ВІДСУТНІЙ!", flush=True)
     print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
