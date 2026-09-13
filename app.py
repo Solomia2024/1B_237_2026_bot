@@ -1,21 +1,15 @@
 import os
 import io
 import json
-import asyncio
 from datetime import datetime
 import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-
-TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
-WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-app.onrender.com").rstrip('/')
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL.startswith("postgres://"):
@@ -36,10 +30,10 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# --- Робота з Google Drive (із розширеним логуванням) ---
+# --- Робота з Google Drive ---
 def get_drive_service():
     if not GOOGLE_CREDENTIALS_JSON:
-        print("❌ DRIVE ERROR: Змінна GOOGLE_CREDENTIALS_JSON порожня або не зчитана!")
+        print("❌ DRIVE ERROR: GOOGLE_CREDENTIALS_JSON порожня або не зчитана!")
         return None
     try:
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
@@ -49,21 +43,23 @@ def get_drive_service():
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"❌ DRIVE ERROR: Помилка парсингу JSON або авторизації Google Drive: {e}")
+        print(f"❌ DRIVE ERROR: Помилка авторизації/парсингу JSON: {e}")
         return None
 
 def upload_file_to_drive(file_storage, filename):
+    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ: {filename}")
+    
     if not GOOGLE_CREDENTIALS_JSON:
-        print("❌ DRIVE ERROR: Відсутній GOOGLE_CREDENTIALS_JSON у змінних оточення Render!")
+        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_CREDENTIALS_JSON у Render!")
         return None
 
     if not GOOGLE_DRIVE_FOLDER_ID:
-        print("❌ DRIVE ERROR: Відсутній GOOGLE_DRIVE_FOLDER_ID у змінних оточення Render!")
+        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_DRIVE_FOLDER_ID у Render!")
         return None
 
     service = get_drive_service()
     if not service:
-        print("❌ DRIVE ERROR: Не вдалося створити об'єкт service!")
+        print("❌ DRIVE ERROR: Не вдалося створити Google Drive Service!")
         return None
 
     try:
@@ -71,7 +67,7 @@ def upload_file_to_drive(file_storage, filename):
         file_bytes = file_storage.read()
         
         if not file_bytes:
-            print("❌ DRIVE ERROR: Передано порожній файл (0 байт)!")
+            print("❌ DRIVE ERROR: Файл порожній (0 байт)!")
             return None
 
         file_metadata = {
@@ -91,20 +87,19 @@ def upload_file_to_drive(file_storage, filename):
             fields='id, webViewLink'
         ).execute()
 
-        # Надаємо доступ на читання за посиланням
         service.permissions().create(
             fileId=file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
         ).execute()
 
         web_link = file.get('webViewLink')
-        print(f"✅ DRIVE SUCCESS: Файл завантажено на Google Диск! URL: {web_link}")
+        print(f"✅ DRIVE SUCCESS! URL: {web_link}")
         return web_link
     except Exception as e:
-        print(f"❌ DRIVE EXCEPTION: Помилка під час завантаження файлу на Google Диск: {e}")
+        print(f"❌ DRIVE EXCEPTION: {e}")
         return None
 
-# --- Робота з Базою Даних (psycopg 3) ---
+# --- Робота з БД ---
 def get_db_connection():
     if not DATABASE_URL:
         return None
@@ -112,7 +107,7 @@ def get_db_connection():
         conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
         return conn
     except Exception as e:
-        print(f"Помилка підключення до БД: {e}")
+        print(f"Помилка БД: {e}")
         return None
 
 def is_user_admin(user_id):
@@ -139,16 +134,10 @@ def is_user_admin(user_id):
 def init_db():
     conn = get_db_connection()
     if not conn:
-        print("DATABASE_URL відсутня або недоступна. Пропуск ініціалізації БД.")
         return
 
     c = conn.cursor()
-
-    c.execute('''CREATE TABLE IF NOT EXISTS admins (
-                    user_id BIGINT PRIMARY KEY,
-                    comment TEXT
-                )''')
-
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY, comment TEXT)''')
     for admin_id in DEFAULT_ADMIN_IDS:
         c.execute("INSERT INTO admins (user_id, comment) VALUES (%s, %s) ON CONFLICT DO NOTHING", (admin_id, 'Головний адмін'))
 
@@ -223,7 +212,7 @@ def init_db():
 try:
     init_db()
 except Exception as e:
-    print(f"Помилка при ініціалізації БД: {e}")
+    print(f"Помилка БД: {e}")
 
 app = Flask(__name__)
 
@@ -1413,10 +1402,7 @@ HTML_TEMPLATE = """
             formData.append('date_str', date_str);
 
             if(fileInput.files.length > 0) {
-                console.log("📎 Прикріплено файл:", fileInput.files[0].name);
                 formData.append('receipt', fileInput.files[0]);
-            } else {
-                console.log("⚠️ Файл не обрано!");
             }
 
             const res = await fetch('/api/add_expense', {
@@ -1428,7 +1414,7 @@ HTML_TEMPLATE = """
             if(ans.error) return alert(ans.error);
 
             if(ans.drive_status === 'error') {
-                alert('⚠️ Витрату збережено, але НЕ вдалося завантажити чек на Google Диск! Перевірте логи Render.');
+                alert('⚠️ Витрату збережено, але НЕ вдалося завантажити чек на Google Диск!');
             } else if(ans.drive_status === 'success') {
                 alert('✅ Витрату та чек на Google Диск успішно збережено!');
             } else {
@@ -1521,7 +1507,6 @@ HTML_TEMPLATE = """
             formData.append('paid', paid);
 
             if(fileInput.files.length > 0) {
-                console.log("📎 Прикріплено квитанцію:", fileInput.files[0].name);
                 formData.append('receipt', fileInput.files[0]);
             }
 
@@ -1788,7 +1773,7 @@ def add_expense():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 Отримано файл з веб-форми: {file.filename}")
+            print(f"📥 Отримано файл: {file.filename}")
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1798,8 +1783,6 @@ def add_expense():
                 drive_status = 'success'
             else:
                 drive_status = 'error'
-        else:
-            print("⚠️ Файл у полі 'receipt' порожній або ім'я не зчитано!")
 
     conn = get_db_connection()
     if not conn:
@@ -2000,7 +1983,7 @@ def save_payment():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 Отримано квитанцію з веб-форми: {file.filename}")
+            print(f"📥 Отримано квитанцію: {file.filename}")
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -2054,33 +2037,6 @@ def delete_collection():
     conn.close()
     return jsonify({'status': 'ok'})
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    clean_url = WEB_APP_URL.replace('[', '').replace(']', '').split('(')[0].strip()
-    app_url_with_id = f"{clean_url}?user_id={user_id}"
-    
-    kb = [[InlineKeyboardButton("📊 Відкрити бюджет класу", web_app=WebAppInfo(url=app_url_with_id))]]
-    await update.message.reply_text("👋 Вітаємо в системі обліку бюджету 1-Б класу!\nНатисніть кнопку нижче для перегляду:", reply_markup=InlineKeyboardMarkup(kb))
-
-def run_bot():
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        telegram_app = ApplicationBuilder().token(TOKEN).build()
-        telegram_app.add_handler(CommandHandler("start", start_cmd))
-        
-        loop.run_until_complete(telegram_app.initialize())
-        loop.run_until_complete(telegram_app.updater.start_polling(drop_pending_updates=True))
-        loop.run_until_complete(telegram_app.start())
-        loop.run_forever()
-    except Exception as e:
-        print(f"Помилка фонового запуску боту: {e}")
-
 if __name__ == '__main__':
-    if TOKEN and TOKEN != "YOUR_BOT_TOKEN":
-        from threading import Thread
-        Thread(target=run_bot, daemon=True).start()
-        
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
