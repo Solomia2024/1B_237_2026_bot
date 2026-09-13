@@ -1413,7 +1413,10 @@ HTML_TEMPLATE = """
             formData.append('date_str', date_str);
 
             if(fileInput.files.length > 0) {
+                console.log("📎 Прикріплено файл:", fileInput.files[0].name);
                 formData.append('receipt', fileInput.files[0]);
+            } else {
+                console.log("⚠️ Файл не обрано!");
             }
 
             const res = await fetch('/api/add_expense', {
@@ -1424,7 +1427,14 @@ HTML_TEMPLATE = """
             const ans = await res.json();
             if(ans.error) return alert(ans.error);
 
-            alert('Витрату успішно збережено!');
+            if(ans.drive_status === 'error') {
+                alert('⚠️ Витрату збережено, але НЕ вдалося завантажити чек на Google Диск! Перевірте логи Render.');
+            } else if(ans.drive_status === 'success') {
+                alert('✅ Витрату та чек на Google Диск успішно збережено!');
+            } else {
+                alert('Витрату збережено (без чеку).');
+            }
+
             resetExpenseForm();
             loadData();
         }
@@ -1511,6 +1521,7 @@ HTML_TEMPLATE = """
             formData.append('paid', paid);
 
             if(fileInput.files.length > 0) {
+                console.log("📎 Прикріплено квитанцію:", fileInput.files[0].name);
                 formData.append('receipt', fileInput.files[0]);
             }
 
@@ -1522,7 +1533,14 @@ HTML_TEMPLATE = """
             const ans = await res.json();
             if(ans.error) return alert(ans.error);
 
-            alert('Оплату успішно збережено!');
+            if(ans.drive_status === 'error') {
+                alert('⚠️ Оплату збережено, але НЕ вдалося завантажити чек на Google Диск!');
+            } else if(ans.drive_status === 'success') {
+                alert('✅ Оплату та чек на Google Диск успішно збережено!');
+            } else {
+                alert('Оплату успішно збережено!');
+            }
+
             fileInput.value = '';
             loadData();
         }
@@ -1765,13 +1783,23 @@ def add_expense():
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
     drive_link = None
+    drive_status = 'none'
+
     if 'receipt' in request.files:
         file = request.files['receipt']
-        if file and allowed_file(file.filename):
-            ext = file.filename.rsplit('.', 1)[1].lower()
+        if file and file.filename != '':
+            print(f"📥 Отримано файл з веб-форми: {file.filename}")
+            ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
+            
+            if drive_link:
+                drive_status = 'success'
+            else:
+                drive_status = 'error'
+        else:
+            print("⚠️ Файл у полі 'receipt' порожній або ім'я не зчитано!")
 
     conn = get_db_connection()
     if not conn:
@@ -1792,7 +1820,7 @@ def add_expense():
     conn.commit()
     c.close()
     conn.close()
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'drive_status': drive_status})
 
 @app.route('/api/delete_expense', methods=['POST'])
 def delete_expense():
@@ -1967,12 +1995,20 @@ def save_payment():
     paid = float(request.form.get('paid', 0))
 
     drive_link = None
+    drive_status = 'none'
+
     if 'receipt' in request.files:
         file = request.files['receipt']
-        if file and allowed_file(file.filename):
-            ext = file.filename.rsplit('.', 1)[1].lower()
+        if file and file.filename != '':
+            print(f"📥 Отримано квитанцію з веб-форми: {file.filename}")
+            ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
+            
+            if drive_link:
+                drive_status = 'success'
+            else:
+                drive_status = 'error'
 
     conn = get_db_connection()
     if not conn:
@@ -1995,7 +2031,7 @@ def save_payment():
     conn.commit()
     c.close()
     conn.close()
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'drive_status': drive_status})
 
 @app.route('/api/delete_collection', methods=['POST'])
 def delete_collection():
