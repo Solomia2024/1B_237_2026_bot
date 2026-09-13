@@ -32,16 +32,20 @@ def allowed_file(filename):
 
 def get_db_connection():
     if not DATABASE_URL:
-        raise ValueError("DATABASE_URL не вказано в Environment Variables!")
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return conn
+        return None
+    try:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        return conn
+    except Exception as e:
+        print(f"Помилка підключення до БД: {e}")
+        return None
 
 def init_db():
-    if not DATABASE_URL:
-        print("DATABASE_URL відсутня. Пропуск ініціалізації БД.")
+    conn = get_db_connection()
+    if not conn:
+        print("DATABASE_URL відсутня або недоступна. Пропуск ініціалізації БД.")
         return
 
-    conn = get_db_connection()
     c = conn.cursor()
 
     c.execute('''CREATE TABLE IF NOT EXISTS students (
@@ -544,7 +548,7 @@ HTML_TEMPLATE = """
         }
 
         function renderStudentCheckboxes() {
-            if(!globalData) return;
+            if(!globalData || !globalData.all_students) return;
             const container = document.getElementById('coll-students-checkboxes');
             container.innerHTML = '';
             globalData.all_students.filter(s => s.is_active === 1).forEach(s => {
@@ -566,8 +570,13 @@ HTML_TEMPLATE = """
             const startD = document.getElementById('cat-start-date').value || '';
             const endD = document.getElementById('cat-end-date').value || '';
 
-            const res = await fetch(`/api/budget?user_id=${currentUserId}&start_date=${startD}&end_date=${endD}`);
-            globalData = await res.json();
+            try {
+                const res = await fetch(`/api/budget?user_id=${currentUserId}&start_date=${startD}&end_date=${endD}`);
+                globalData = await res.json();
+            } catch(e) {
+                console.error("Помилка при отриманні даних:", e);
+                return;
+            }
             
             if(globalData.is_admin) {
                 document.getElementById('admin-tab-btn').style.display = 'block';
@@ -1383,6 +1392,19 @@ def get_budget():
     is_admin = user_id in ADMIN_IDS
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({
+            'students': [],
+            'all_students': [],
+            'collections': [],
+            'expenses': [],
+            'category_stats': {
+                'fund': {'target': 0, 'paid': 0, 'exp': 0, 'balance': 0},
+                'other': {'target': 0, 'paid': 0, 'exp': 0, 'balance': 0}
+            },
+            'is_admin': is_admin
+        })
+
     c = conn.cursor()
 
     c.execute("SELECT id, name, is_class_fund, is_optional, is_selective, target_amount, created_at FROM collections ORDER BY id ASC")
@@ -1513,6 +1535,8 @@ def add_expense():
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
 
     if exp_id:
@@ -1541,6 +1565,8 @@ def delete_expense():
     exp_id = data.get('expense_id')
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
     c.execute("DELETE FROM expenses WHERE id=%s", (exp_id,))
     conn.commit()
@@ -1560,6 +1586,8 @@ def transfer_to_fund():
     date_str = datetime.now().strftime("%Y-%m-%d")
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
 
     c.execute("SELECT name, is_class_fund FROM collections WHERE id=%s", (c_id,))
@@ -1568,7 +1596,7 @@ def transfer_to_fund():
     if not coll_info or coll_info['is_class_fund'] == 1:
         c.close()
         conn.close()
-        return jsonify({'error': 'Перенесення за raw_zalyshku можливе лише для зборів категорії "Інші збори"!'})
+        return jsonify({'error': 'Перенесення залишку можливе лише для зборів категорії "Інші збори"!'})
 
     coll_name = coll_info['name']
 
@@ -1606,6 +1634,8 @@ def save_student():
     date_added = data.get('date_added', datetime.now().strftime("%Y-%m-%d"))
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
 
     if s_id:
@@ -1639,6 +1669,8 @@ def toggle_student_active():
     is_active = data.get('is_active', 1)
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
     c.execute("UPDATE students SET is_active=%s WHERE id=%s", (is_active, s_id))
     conn.commit()
@@ -1662,6 +1694,8 @@ def add_collection():
     selected_students = data.get('selected_students', [])
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
     c.execute("INSERT INTO collections (name, is_class_fund, is_optional, is_selective, target_amount, created_at) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
               (name, is_fund, is_optional, is_selective, target, created_at))
@@ -1702,6 +1736,8 @@ def save_payment():
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
 
     if filename:
@@ -1732,6 +1768,8 @@ def delete_collection():
     c_id = data.get('collection_id')
 
     conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'База даних недоступна!'})
     c = conn.cursor()
     c.execute("DELETE FROM collections WHERE id=%s", (c_id,))
     c.execute("DELETE FROM payments WHERE collection_id=%s", (c_id,))
@@ -1749,13 +1787,24 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Вітаємо в системі обліку бюджету 1-Б класу!\nНатисніть кнопку нижче для перегляду:", reply_markup=InlineKeyboardMarkup(kb))
 
 def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    telegram_app = ApplicationBuilder().token(TOKEN).build()
-    telegram_app.add_handler(CommandHandler("start", start_cmd))
-    telegram_app.run_polling(drop_pending_updates=True, close_loop=False)
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        telegram_app = ApplicationBuilder().token(TOKEN).build()
+        telegram_app.add_handler(CommandHandler("start", start_cmd))
+        
+        loop.run_until_complete(telegram_app.initialize())
+        loop.run_until_complete(telegram_app.updater.start_polling(drop_pending_updates=True))
+        loop.run_until_complete(telegram_app.start())
+        loop.run_forever()
+    except Exception as e:
+        print(f"Помилка фонового запуску боту: {e}")
 
 if __name__ == '__main__':
-    from threading import Thread
-    Thread(target=run_bot, daemon=True).start()
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    if TOKEN and TOKEN != "YOUR_BOT_TOKEN":
+        from threading import Thread
+        Thread(target=run_bot, daemon=True).start()
+        
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
