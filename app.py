@@ -222,7 +222,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Бюджет 1-Б класу</title>
+    <title>Бюджет 1-Б класу (v2.0)</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1401,8 +1401,11 @@ HTML_TEMPLATE = """
             formData.append('amount', amount);
             formData.append('date_str', date_str);
 
-            if(fileInput.files.length > 0) {
-                formData.append('receipt', fileInput.files[0]);
+            if(fileInput.files && fileInput.files.length > 0) {
+                alert('📎 Зчитано файл з поля: ' + fileInput.files[0].name);
+                formData.append('receipt', fileInput.files[0], fileInput.files[0].name);
+            } else {
+                alert('⚠️ Файл у полі витрат не вибрано!');
             }
 
             const res = await fetch('/api/add_expense', {
@@ -1506,8 +1509,9 @@ HTML_TEMPLATE = """
             formData.append('collection_id', collection_id);
             formData.append('paid', paid);
 
-            if(fileInput.files.length > 0) {
-                formData.append('receipt', fileInput.files[0]);
+            if(fileInput.files && fileInput.files.length > 0) {
+                alert('📎 Зчитано чек оплати: ' + fileInput.files[0].name);
+                formData.append('receipt', fileInput.files[0], fileInput.files[0].name);
             }
 
             const res = await fetch('/api/save_payment', {
@@ -1767,7 +1771,10 @@ def add_expense():
     amount = float(request.form.get('amount', 0))
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
-    print("📋 [EXPENSE] Отримані ключі у request.files:", list(request.files.keys()))
+    # 🔴 ПРИМУСОВИЙ ДРУК У ЛОГИ RENDER
+    print("--------------------------------------------------")
+    print(f"📋 [EXPENSE v2.0] Ключі request.files: {list(request.files.keys())}")
+    print(f"📋 [EXPENSE v2.0] Ключі request.form: {list(request.form.keys())}")
 
     drive_link = None
     drive_status = 'none'
@@ -1775,7 +1782,7 @@ def add_expense():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [EXPENSE] Отримано файл: {file.filename}")
+            print(f"📥 [EXPENSE v2.0] Зчитано файл: {file.filename}")
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1786,9 +1793,10 @@ def add_expense():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [EXPENSE] Ключ 'receipt' є, але файл порожній або ім'я відсутнє.")
+            print("⚠️ [EXPENSE v2.0] Файл у полі 'receipt' порожній!")
     else:
-        print("⚠️ [EXPENSE] Ключ 'receipt' ВІДСУТНІЙ у request.files!")
+        print("⚠️ [EXPENSE v2.0] 'receipt' ВІДСУТНІЙ у request.files!")
+    print("--------------------------------------------------")
 
     conn = get_db_connection()
     if not conn:
@@ -1983,7 +1991,8 @@ def save_payment():
     c_id = request.form.get('collection_id')
     paid = float(request.form.get('paid', 0))
 
-    print("📋 [PAYMENT] Отримані ключі у request.files:", list(request.files.keys()))
+    print("--------------------------------------------------")
+    print(f"📋 [PAYMENT v2.0] Ключі request.files: {list(request.files.keys())}")
 
     drive_link = None
     drive_status = 'none'
@@ -1991,7 +2000,7 @@ def save_payment():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [PAYMENT] Отримано квитанцію: {file.filename}")
+            print(f"📥 [PAYMENT v2.0] Зчитано квитанцію: {file.filename}")
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -2001,9 +2010,10 @@ def save_payment():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [PAYMENT] Ключ 'receipt' є, але файл порожній або ім'я відсутнє.")
+            print("⚠️ [PAYMENT v2.0] Файл у полі 'receipt' порожній!")
     else:
-        print("⚠️ [PAYMENT] Ключ 'receipt' ВІДСУТНІЙ у request.files!")
+        print("⚠️ [PAYMENT v2.0] 'receipt' ВІДСУТНІЙ у request.files!")
+    print("--------------------------------------------------")
 
     conn = get_db_connection()
     if not conn:
