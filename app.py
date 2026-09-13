@@ -36,9 +36,10 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# --- Робота з Google Drive ---
+# --- Робота з Google Drive (із розширеним логуванням) ---
 def get_drive_service():
     if not GOOGLE_CREDENTIALS_JSON:
+        print("❌ DRIVE ERROR: Змінна GOOGLE_CREDENTIALS_JSON порожня або не зчитана!")
         return None
     try:
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
@@ -48,22 +49,36 @@ def get_drive_service():
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"Помилка авторизації Google Drive: {e}")
+        print(f"❌ DRIVE ERROR: Помилка парсингу JSON або авторизації Google Drive: {e}")
         return None
 
 def upload_file_to_drive(file_storage, filename):
+    if not GOOGLE_CREDENTIALS_JSON:
+        print("❌ DRIVE ERROR: Відсутній GOOGLE_CREDENTIALS_JSON у змінних оточення Render!")
+        return None
+
+    if not GOOGLE_DRIVE_FOLDER_ID:
+        print("❌ DRIVE ERROR: Відсутній GOOGLE_DRIVE_FOLDER_ID у змінних оточення Render!")
+        return None
+
     service = get_drive_service()
-    if not service or not GOOGLE_DRIVE_FOLDER_ID:
-        print("Google Drive не налаштовано або відсутній GOOGLE_DRIVE_FOLDER_ID")
+    if not service:
+        print("❌ DRIVE ERROR: Не вдалося створити об'єкт service!")
         return None
 
     try:
+        file_storage.seek(0)
+        file_bytes = file_storage.read()
+        
+        if not file_bytes:
+            print("❌ DRIVE ERROR: Передано порожній файл (0 байт)!")
+            return None
+
         file_metadata = {
             'name': filename,
-            'parents': [GOOGLE_DRIVE_FOLDER_ID]
+            'parents': [GOOGLE_DRIVE_FOLDER_ID.strip()]
         }
         
-        file_bytes = file_storage.read()
         media = MediaIoBaseUpload(
             io.BytesIO(file_bytes),
             mimetype=file_storage.mimetype or 'application/octet-stream',
@@ -76,15 +91,17 @@ def upload_file_to_drive(file_storage, filename):
             fields='id, webViewLink'
         ).execute()
 
-        # Робимо файл публічно доступним для перегляду
+        # Надаємо доступ на читання за посиланням
         service.permissions().create(
             fileId=file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
         ).execute()
 
-        return file.get('webViewLink')
+        web_link = file.get('webViewLink')
+        print(f"✅ DRIVE SUCCESS: Файл завантажено на Google Диск! URL: {web_link}")
+        return web_link
     except Exception as e:
-        print(f"Помилка завантаження файлу на Google Диск: {e}")
+        print(f"❌ DRIVE EXCEPTION: Помилка під час завантаження файлу на Google Диск: {e}")
         return None
 
 # --- Робота з Базою Даних (psycopg 3) ---
