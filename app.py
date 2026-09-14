@@ -13,18 +13,18 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 if "channel_binding=" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.split("&channel_binding=")[0]
 
-# 🔴 Параметри Google Drive (OAuth 2.0)
-GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN", "")
+# 🔴 Параметри Google Drive (OAuth 2.0) з очисткою пробілів
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
 
 # 🔴 Головні адміністратори
 DEFAULT_ADMIN_IDS = [945268466, 114251065]
@@ -42,10 +42,10 @@ def get_drive_service():
     try:
         creds = Credentials(
             token=None,
-            refresh_token=GOOGLE_REFRESH_TOKEN.strip(),
+            refresh_token=GOOGLE_REFRESH_TOKEN,
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=GOOGLE_CLIENT_ID.strip(),
-            client_secret=GOOGLE_CLIENT_SECRET.strip(),
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
             scopes=['https://www.googleapis.com/auth/drive.file']
         )
         return build('drive', 'v3', credentials=creds)
@@ -57,7 +57,7 @@ def get_drive_service():
 def upload_file_to_drive(file_storage, filename):
     print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ НА GOOGLE DRIVE (OAuth v2): {filename}", flush=True)
 
-    folder_id = GOOGLE_DRIVE_FOLDER_ID.strip()
+    folder_id = GOOGLE_DRIVE_FOLDER_ID
     if not folder_id:
         print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_DRIVE_FOLDER_ID у Render!", flush=True)
         return None
@@ -228,11 +228,16 @@ app = Flask(__name__)
 # --- 🔐 АВТОМАТИЧНИЙ ГЕНЕРАТОР REFRESH TOKEN ---
 @app.route('/auth')
 def auth():
+    client_id = GOOGLE_CLIENT_ID
+    client_secret = GOOGLE_CLIENT_SECRET
+    
+    print(f"📋 [AUTH DEBUG] GOOGLE_CLIENT_ID: '{client_id[:20]}...' (Довжина: {len(client_id)})", flush=True)
+
     redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
     client_config = {
         "web": {
-            "client_id": GOOGLE_CLIENT_ID.strip(),
-            "client_secret": GOOGLE_CLIENT_SECRET.strip(),
+            "client_id": client_id,
+            "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [redirect_uri]
@@ -252,11 +257,14 @@ def auth():
 
 @app.route('/oauth2callback')
 def oauth2callback():
+    client_id = GOOGLE_CLIENT_ID
+    client_secret = GOOGLE_CLIENT_SECRET
+
     redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
     client_config = {
         "web": {
-            "client_id": GOOGLE_CLIENT_ID.strip(),
-            "client_secret": GOOGLE_CLIENT_SECRET.strip(),
+            "client_id": client_id,
+            "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [redirect_uri]
@@ -272,7 +280,7 @@ def oauth2callback():
     
     return f"""
     <h2>✅ Авторизація успішна!</h2>
-    <p>Ось ваш <b>GOOGLE_REFRESH_TOKEN</b>:</p>
+    <p>Ось ваш новий <b>GOOGLE_REFRESH_TOKEN</b>:</p>
     <textarea rows="4" cols="80" style="font-size:14px; padding:10px;">{credentials.refresh_token}</textarea>
     <p>Скопіюйте його та вставте у змінну <b>GOOGLE_REFRESH_TOKEN</b> у Render!</p>
     """
