@@ -94,7 +94,6 @@ def upload_file_to_drive(file_storage, filename):
 
         file_id = file.get('id')
 
-        # Надаємо доступ на читання всім за посиланням
         service.permissions().create(
             fileId=file_id,
             body={'type': 'anyone', 'role': 'reader'}
@@ -228,16 +227,11 @@ app = Flask(__name__)
 # --- 🔐 АВТОМАТИЧНИЙ ГЕНЕРАТОР REFRESH TOKEN ---
 @app.route('/auth')
 def auth():
-    client_id = GOOGLE_CLIENT_ID
-    client_secret = GOOGLE_CLIENT_SECRET
-    
-    print(f"📋 [AUTH DEBUG] GOOGLE_CLIENT_ID: '{client_id[:20]}...' (Довжина: {len(client_id)})", flush=True)
-
     redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
     client_config = {
         "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [redirect_uri]
@@ -245,9 +239,9 @@ def auth():
     }
     flow = Flow.from_client_config(
         client_config,
-        scopes=['https://www.googleapis.com/auth/drive.file'],
-        redirect_uri=redirect_uri
+        scopes=['https://www.googleapis.com/auth/drive.file']
     )
+    flow.redirect_uri = redirect_uri
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         prompt='consent',
@@ -257,14 +251,11 @@ def auth():
 
 @app.route('/oauth2callback')
 def oauth2callback():
-    client_id = GOOGLE_CLIENT_ID
-    client_secret = GOOGLE_CLIENT_SECRET
-
     redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
     client_config = {
         "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [redirect_uri]
@@ -272,9 +263,9 @@ def oauth2callback():
     }
     flow = Flow.from_client_config(
         client_config,
-        scopes=['https://www.googleapis.com/auth/drive.file'],
-        redirect_uri=redirect_uri
+        scopes=['https://www.googleapis.com/auth/drive.file']
     )
+    flow.redirect_uri = redirect_uri
     flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
     
