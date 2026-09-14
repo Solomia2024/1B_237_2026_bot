@@ -240,7 +240,8 @@ def auth():
     }
     flow = Flow.from_client_config(
         client_config,
-        scopes=['https://www.googleapis.com/auth/drive.file']
+        scopes=['https://www.googleapis.com/auth/drive.file'],
+        autogenerate_code_verifier=False
     )
     flow.redirect_uri = redirect_uri
     authorization_url, state = flow.authorization_url(
@@ -266,7 +267,8 @@ def oauth2callback():
     try:
         flow = Flow.from_client_config(
             client_config,
-            scopes=['https://www.googleapis.com/auth/drive.file']
+            scopes=['https://www.googleapis.com/auth/drive.file'],
+            autogenerate_code_verifier=False
         )
         flow.redirect_uri = redirect_uri
         
