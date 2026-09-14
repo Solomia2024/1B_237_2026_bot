@@ -5,10 +5,11 @@ import traceback
 from datetime import datetime
 import psycopg
 from psycopg.rows import dict_row
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, redirect
 from werkzeug.utils import secure_filename
 
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -223,6 +224,58 @@ except Exception as e:
     print(f"Помилка БД: {e}", flush=True)
 
 app = Flask(__name__)
+
+# --- 🔐 АВТОМАТИЧНИЙ ГЕНЕРАТОР REFRESH TOKEN ---
+@app.route('/auth')
+def auth():
+    redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID.strip(),
+            "client_secret": GOOGLE_CLIENT_SECRET.strip(),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri]
+        }
+    }
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=['https://www.googleapis.com/auth/drive.file'],
+        redirect_uri=redirect_uri
+    )
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        prompt='consent',
+        include_granted_scopes='true'
+    )
+    return redirect(authorization_url)
+
+@app.route('/oauth2callback')
+def oauth2callback():
+    redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID.strip(),
+            "client_secret": GOOGLE_CLIENT_SECRET.strip(),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri]
+        }
+    }
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=['https://www.googleapis.com/auth/drive.file'],
+        redirect_uri=redirect_uri
+    )
+    flow.fetch_token(authorization_response=request.url)
+    credentials = flow.credentials
+    
+    return f"""
+    <h2>✅ Авторизація успішна!</h2>
+    <p>Ось ваш <b>GOOGLE_REFRESH_TOKEN</b>:</p>
+    <textarea rows="4" cols="80" style="font-size:14px; padding:10px;">{credentials.refresh_token}</textarea>
+    <p>Скопіюйте його та вставте у змінну <b>GOOGLE_REFRESH_TOKEN</b> у Render!</p>
+    """
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
