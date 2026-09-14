@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -19,9 +19,11 @@ if DATABASE_URL.startswith("postgres://"):
 if "channel_binding=" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.split("&channel_binding=")[0]
 
-# 🔴 Параметри Google Drive
+# 🔴 Параметри Google Drive (OAuth 2.0)
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN", "")
 
 # 🔴 Головні адміністратори
 DEFAULT_ADMIN_IDS = [945268466, 114251065]
@@ -31,29 +33,28 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# --- Робота з Google Drive ---
+# --- Робота з Google Drive (через OAuth Refresh Token особистого акаунта) ---
 def get_drive_service():
-    if not GOOGLE_CREDENTIALS_JSON:
-        print("❌ DRIVE ERROR: GOOGLE_CREDENTIALS_JSON порожня або не зчитана!", flush=True)
+    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN):
+        print("❌ DRIVE ERROR: Відсутні OAuth параметри (CLIENT_ID, CLIENT_SECRET або REFRESH_TOKEN) у Render!", flush=True)
         return None
     try:
-        creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
-        creds = Credentials.from_service_account_info(
-            creds_dict,
-            scopes=['https://www.googleapis.com/auth/drive']
+        creds = Credentials(
+            token=None,
+            refresh_token=GOOGLE_REFRESH_TOKEN.strip(),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=GOOGLE_CLIENT_ID.strip(),
+            client_secret=GOOGLE_CLIENT_SECRET.strip(),
+            scopes=['https://www.googleapis.com/auth/drive.file']
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"❌ DRIVE ERROR: Помилка авторизації/парсингу JSON: {e}", flush=True)
+        print(f"❌ DRIVE ERROR: Помилка авторизації OAuth: {e}", flush=True)
         print(traceback.format_exc(), flush=True)
         return None
 
 def upload_file_to_drive(file_storage, filename):
-    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ НА GOOGLE DRIVE: {filename}", flush=True)
-    
-    if not GOOGLE_CREDENTIALS_JSON:
-        print("❌ DRIVE ERROR: Відсутня змінна GOOGLE_CREDENTIALS_JSON у Render!", flush=True)
-        return None
+    print(f"🚀 ПОЧАТОК ЗАВАНТАЖЕННЯ НА GOOGLE DRIVE (OAuth v2): {filename}", flush=True)
 
     folder_id = GOOGLE_DRIVE_FOLDER_ID.strip()
     if not folder_id:
@@ -78,7 +79,6 @@ def upload_file_to_drive(file_storage, filename):
             'parents': [folder_id]
         }
         
-        # 🔑 Ключове виправлення: resumable=False дозволяє оминути обмеження storageQuotaExceeded для сервісних акаунтів
         media = MediaIoBaseUpload(
             io.BytesIO(file_bytes),
             mimetype=file_storage.mimetype or 'application/octet-stream',
@@ -88,17 +88,15 @@ def upload_file_to_drive(file_storage, filename):
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, webViewLink',
-            supportsAllDrives=True
+            fields='id, webViewLink'
         ).execute()
 
         file_id = file.get('id')
 
-        # Відкриваємо доступ за посиланням
+        # Надаємо доступ на читання всім за посиланням
         service.permissions().create(
             fileId=file_id,
-            body={'type': 'anyone', 'role': 'reader'},
-            supportsAllDrives=True
+            body={'type': 'anyone', 'role': 'reader'}
         ).execute()
 
         web_link = file.get('webViewLink')
@@ -232,7 +230,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Бюджет 1-Б класу (v5.0 DirectUpload)</title>
+    <title>Бюджет 1-Б класу (v6.0 OAuth2)</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1778,7 +1776,7 @@ def add_expense():
     date_str = request.form.get('date_str', datetime.now().strftime("%Y-%m-%d"))
 
     print("--------------------------------------------------", flush=True)
-    print(f"📋 [EXPENSE v5.0] request.files: {list(request.files.keys())}", flush=True)
+    print(f"📋 [EXPENSE v6.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -1786,7 +1784,7 @@ def add_expense():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [EXPENSE v5.0] Зчитано файл: {file.filename}", flush=True)
+            print(f"📥 [EXPENSE v6.0] Зчитано файл: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             timestamp = int(datetime.now().timestamp())
             filename = secure_filename(f"exp_{c_id}_{timestamp}.{ext}")
@@ -1797,9 +1795,9 @@ def add_expense():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [EXPENSE v5.0] Файл порожній!", flush=True)
+            print("⚠️ [EXPENSE v6.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [EXPENSE v5.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+        print("⚠️ [EXPENSE v6.0] 'receipt' ВІДСУТНІЙ!", flush=True)
     print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
@@ -1996,7 +1994,7 @@ def save_payment():
     paid = float(request.form.get('paid', 0))
 
     print("--------------------------------------------------", flush=True)
-    print(f"📋 [PAYMENT v5.0] request.files: {list(request.files.keys())}", flush=True)
+    print(f"📋 [PAYMENT v6.0] request.files: {list(request.files.keys())}", flush=True)
 
     drive_link = None
     drive_status = 'none'
@@ -2004,7 +2002,7 @@ def save_payment():
     if 'receipt' in request.files:
         file = request.files['receipt']
         if file and file.filename != '':
-            print(f"📥 [PAYMENT v5.0] Зчитано квитанцію: {file.filename}", flush=True)
+            print(f"📥 [PAYMENT v6.0] Зчитано квитанцію: {file.filename}", flush=True)
             ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
             filename = secure_filename(f"receipt_{s_id}_{c_id}.{ext}")
             drive_link = upload_file_to_drive(file, filename)
@@ -2014,9 +2012,9 @@ def save_payment():
             else:
                 drive_status = 'error'
         else:
-            print("⚠️ [PAYMENT v5.0] Файл порожній!", flush=True)
+            print("⚠️ [PAYMENT v6.0] Файл порожній!", flush=True)
     else:
-        print("⚠️ [PAYMENT v5.0] 'receipt' ВІДСУТНІЙ!", flush=True)
+        print("⚠️ [PAYMENT v6.0] 'receipt' ВІДСУТНІЙ!", flush=True)
     print("--------------------------------------------------", flush=True)
 
     conn = get_db_connection()
@@ -2047,7 +2045,7 @@ def delete_collection():
     data = request.json
     user_id = int(data.get('user_id', 0))
     if not is_user_admin(user_id):
-        return jsonify({'error': 'Доступ заборонено! Ви не є адміністратором.'})
+        return jsonify({'error': 'Доступ заборонено!'})
 
     c_id = data.get('collection_id')
 
