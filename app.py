@@ -227,6 +227,7 @@ app = Flask(__name__)
 # --- 🔐 АВТОМАТИЧНИЙ ГЕНЕРАТОР REFRESH TOKEN ---
 @app.route('/auth')
 def auth():
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
     redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
     client_config = {
         "web": {
@@ -251,6 +252,7 @@ def auth():
 
 @app.route('/oauth2callback')
 def oauth2callback():
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
     redirect_uri = "https://oneb-237-2026-bot.onrender.com/oauth2callback"
     client_config = {
         "web": {
@@ -261,20 +263,30 @@ def oauth2callback():
             "redirect_uris": [redirect_uri]
         }
     }
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=['https://www.googleapis.com/auth/drive.file']
-    )
-    flow.redirect_uri = redirect_uri
-    flow.fetch_token(authorization_response=request.url)
-    credentials = flow.credentials
-    
-    return f"""
-    <h2>✅ Авторизація успішна!</h2>
-    <p>Ось ваш новий <b>GOOGLE_REFRESH_TOKEN</b>:</p>
-    <textarea rows="4" cols="80" style="font-size:14px; padding:10px;">{credentials.refresh_token}</textarea>
-    <p>Скопіюйте його та вставте у змінну <b>GOOGLE_REFRESH_TOKEN</b> у Render!</p>
-    """
+    try:
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        flow.redirect_uri = redirect_uri
+        
+        req_url = request.url
+        if req_url.startswith('http://'):
+            req_url = req_url.replace('http://', 'https://', 1)
+
+        flow.fetch_token(authorization_response=req_url)
+        credentials = flow.credentials
+        
+        return f"""
+        <h2>✅ Авторизація успішна!</h2>
+        <p>Ось ваш новий <b>GOOGLE_REFRESH_TOKEN</b>:</p>
+        <textarea rows="4" cols="80" style="font-size:14px; padding:10px;">{credentials.refresh_token}</textarea>
+        <p>Скопіюйте його та вставте у змінну <b>GOOGLE_REFRESH_TOKEN</b> у Render!</p>
+        """
+    except Exception as e:
+        err_msg = traceback.format_exc()
+        print(f"❌ OAUTH CALLBACK ERROR: {err_msg}", flush=True)
+        return f"<h3>❌ Помилка при отриманні токена:</h3><pre>{err_msg}</pre>", 500
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
